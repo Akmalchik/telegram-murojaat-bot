@@ -226,10 +226,19 @@ async def get_text(message: Message, state: FSMContext):
     await state.clear()
 
     # Userga javob
-    await message.answer(
-        f"✅ Murojaatingiz qabul qilindi.\n"
-        f"✅ Ваше обращение принято.\n\n"
-        f"🆔 ID: #{appeal_id}"
+   await message.answer(
+    f"✅ Murojaatingiz qabul qilindi.\n"
+    f"✅ Ваше обращение принято.\n\n"
+    f"🆔 ID: #{appeal_id}\n\n"
+
+    f"📨 Murojaatingiz mas'ul xodimlarga yuborildi.\n"
+    f"📨 Ваше обращение направлено ответственным сотрудникам.\n\n"
+
+    f"ℹ️ Zarurat bo‘lsa siz bilan bog‘laniladi.\n"
+    f"ℹ️ При необходимости с вами свяжутся.\n\n"
+
+    f"🔄 Yangi murojaat yuborish uchun /start ni bosing.\n"
+    f"🔄 Для нового обращения нажмите /start."
     )
 
 # STATISTIKA
