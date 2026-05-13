@@ -81,6 +81,18 @@ Ma'lumotlaringiz mas'ul xodimlarga yuboriladi.
 
     await state.set_state(Form.fullname)
 
+# Yangi murojaat
+@dp.message(lambda message: message.text == "➕ Yangi murojaat")
+async def restart_form(message: Message, state: FSMContext):
+
+    await message.answer(
+        "👤 F.I.O kiriting.\n"
+        "👤 Введите Ф.И.О.",
+        reply_markup=ReplyKeyboardRemove()
+    )
+
+    await state.set_state(Form.fullname)
+
 # FIO
 @dp.message(Form.fullname)
 async def get_name(message: Message, state: FSMContext):
@@ -227,6 +239,14 @@ async def get_text(message: Message, state: FSMContext):
     # State clear
     await state.clear()
 
+    # Restart button
+    restart_kb = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="➕ Yangi murojaat")]
+        ],
+        resize_keyboard=True
+    )
+
     # Userga javob
     await message.answer(
         f"✅ Murojaatingiz qabul qilindi.\n"
@@ -238,10 +258,9 @@ async def get_text(message: Message, state: FSMContext):
         f"📨 Ваше обращение направлено ответственным сотрудникам.\n\n"
 
         f"ℹ️ Zarurat bo‘lsa siz bilan bog‘laniladi.\n"
-        f"ℹ️ При необходимости с вами свяжутся.\n\n"
+        f"ℹ️ При необходимости с вами свяжутся.",
 
-        f"🔄 Yangi murojaat yuborish uchun /start ni bosing.\n"
-        f"🔄 Для нового обращения нажмите /start."
+        reply_markup=restart_kb
     )
 
 # STATISTIKA
