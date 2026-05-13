@@ -11,6 +11,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
 from dotenv import load_dotenv
 from collections import Counter
+from aiohttp import web
 
 import asyncio
 import os
@@ -79,6 +80,7 @@ Ma'lumotlaringiz mas'ul xodimlarga yuboriladi.
     )
 
     await state.set_state(Form.fullname)
+
 # FIO
 @dp.message(Form.fullname)
 async def get_name(message: Message, state: FSMContext):
@@ -226,19 +228,20 @@ async def get_text(message: Message, state: FSMContext):
     await state.clear()
 
     # Userga javob
-   await message.answer(
-    f"✅ Murojaatingiz qabul qilindi.\n"
-    f"✅ Ваше обращение принято.\n\n"
-    f"🆔 ID: #{appeal_id}\n\n"
+    await message.answer(
+        f"✅ Murojaatingiz qabul qilindi.\n"
+        f"✅ Ваше обращение принято.\n\n"
 
-    f"📨 Murojaatingiz mas'ul xodimlarga yuborildi.\n"
-    f"📨 Ваше обращение направлено ответственным сотрудникам.\n\n"
+        f"🆔 ID: #{appeal_id}\n\n"
 
-    f"ℹ️ Zarurat bo‘lsa siz bilan bog‘laniladi.\n"
-    f"ℹ️ При необходимости с вами свяжутся.\n\n"
+        f"📨 Murojaatingiz mas'ul xodimlarga yuborildi.\n"
+        f"📨 Ваше обращение направлено ответственным сотрудникам.\n\n"
 
-    f"🔄 Yangi murojaat yuborish uchun /start ni bosing.\n"
-    f"🔄 Для нового обращения нажмите /start."
+        f"ℹ️ Zarurat bo‘lsa siz bilan bog‘laniladi.\n"
+        f"ℹ️ При необходимости с вами свяжутся.\n\n"
+
+        f"🔄 Yangi murojaat yuborish uchun /start ni bosing.\n"
+        f"🔄 Для нового обращения нажмите /start."
     )
 
 # STATISTIKA
@@ -265,9 +268,36 @@ async def statistics(message: Message):
 
     await message.answer(stat_text)
 
+# HEALTH CHECK
+async def health_check(request):
+    return web.Response(text="Bot is running")
+
+# WEB SERVER
+async def start_web_server():
+
+    app = web.Application()
+    app.router.add_get("/", health_check)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+
+    port = int(os.environ.get("PORT", 10000))
+
+    site = web.TCPSite(
+        runner,
+        "0.0.0.0",
+        port
+    )
+
+    await site.start()
+
 # MAIN
 async def main():
+
     print("✅ Bot ishga tushdi...")
+
+    await start_web_server()
+
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
