@@ -30,10 +30,10 @@ dp = Dispatcher(storage=MemoryStorage())
 # Murojaat ID
 appeal_counter = 1
 
-# Statistika uchun
+# Statistika
 appeals_data = []
 
-# States
+# STATES
 class Form(StatesGroup):
     fullname = State()
     mahalla = State()
@@ -81,18 +81,6 @@ Ma'lumotlaringiz mas'ul xodimlarga yuboriladi.
 
     await state.set_state(Form.fullname)
 
-# Yangi murojaat
-@dp.message(lambda message: message.text == "➕ Yangi murojaat")
-async def restart_form(message: Message, state: FSMContext):
-
-    await message.answer(
-        "👤 F.I.O kiriting.\n"
-        "👤 Введите Ф.И.О.",
-        reply_markup=ReplyKeyboardRemove()
-    )
-
-    await state.set_state(Form.fullname)
-
 # FIO
 @dp.message(Form.fullname)
 async def get_name(message: Message, state: FSMContext):
@@ -135,7 +123,7 @@ async def get_name(message: Message, state: FSMContext):
 
     await state.set_state(Form.mahalla)
 
-# Mahalla
+# MAHALLA
 @dp.message(Form.mahalla)
 async def get_mahalla(message: Message, state: FSMContext):
 
@@ -160,7 +148,7 @@ async def get_mahalla(message: Message, state: FSMContext):
 
     await state.set_state(Form.phone)
 
-# Telefon
+# PHONE
 @dp.message(Form.phone)
 async def get_phone(message: Message, state: FSMContext):
 
@@ -178,7 +166,7 @@ async def get_phone(message: Message, state: FSMContext):
 
     await state.set_state(Form.text)
 
-# Murojaat
+# TEXT
 @dp.message(Form.text)
 async def get_text(message: Message, state: FSMContext):
 
@@ -188,7 +176,7 @@ async def get_text(message: Message, state: FSMContext):
 
     data = await state.get_data()
 
-    # Statistika uchun
+    # Statistika
     appeals_data.append({
         "mahalla": data['mahalla']
     })
@@ -209,10 +197,10 @@ async def get_text(message: Message, state: FSMContext):
 {data['text']}
 """
 
-    # Telegram guruhga yuborish
+    # Telegram group
     await bot.send_message(GROUP_ID, result)
 
-    # Google Sheets ga yuborish
+    # Google Sheets
     sheet_url = os.getenv("SHEET_URL")
 
     payload = {
@@ -239,7 +227,7 @@ async def get_text(message: Message, state: FSMContext):
     # State clear
     await state.clear()
 
-    # Restart button
+    # Restart keyboard
     restart_kb = ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="➕ Yangi murojaat")]
@@ -247,7 +235,7 @@ async def get_text(message: Message, state: FSMContext):
         resize_keyboard=True
     )
 
-    # Userga javob
+    # User answer
     await message.answer(
         f"✅ Murojaatingiz qabul qilindi.\n"
         f"✅ Ваше обращение принято.\n\n"
@@ -267,7 +255,6 @@ async def get_text(message: Message, state: FSMContext):
 @dp.message(lambda message: message.text == "/stat")
 async def statistics(message: Message):
 
-    # Faqat guruh uchun
     if message.chat.id != GROUP_ID:
         return
 
@@ -286,6 +273,18 @@ async def statistics(message: Message):
         stat_text += f"{mahalla} — {count}\n"
 
     await message.answer(stat_text)
+
+# RESTART
+@dp.message(lambda message: message.text == "➕ Yangi murojaat")
+async def restart_form(message: Message, state: FSMContext):
+
+    await message.answer(
+        "👤 F.I.O kiriting.\n"
+        "👤 Введите Ф.И.О.",
+        reply_markup=ReplyKeyboardRemove()
+    )
+
+    await state.set_state(Form.fullname)
 
 # HEALTH CHECK
 async def health_check(request):
