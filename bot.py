@@ -23,7 +23,7 @@ load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
 GROUP_ID = int(os.getenv("GROUP_ID"))
 
-# Bot
+# BOT
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
@@ -200,7 +200,34 @@ async def get_text(message: Message, state: FSMContext):
     # Telegram group
     await bot.send_message(GROUP_ID, result)
 
-    # Google Sheets
+    # State clear
+    await state.clear()
+
+    # Restart keyboard
+    restart_kb = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="➕ Yangi murojaat")]
+        ],
+        resize_keyboard=True
+    )
+
+    # USERGA JAVOB (TEZKOR)
+    await message.answer(
+        f"✅ Murojaatingiz qabul qilindi.\n"
+        f"✅ Ваше обращение принято.\n\n"
+
+        f"🆔 ID: #{appeal_id}\n\n"
+
+        f"📨 Murojaatingiz mas'ul xodimlarga yuborildi.\n"
+        f"📨 Ваше обращение направлено ответственным сотрудникам.\n\n"
+
+        f"ℹ️ Zarurat bo‘lsa siz bilan bog‘laniladi.\n"
+        f"ℹ️ При необходимости с вами свяжутся.",
+
+        reply_markup=restart_kb
+    )
+
+    # GOOGLE SHEETS (KEYIN)
     sheet_url = os.getenv("SHEET_URL")
 
     payload = {
@@ -223,33 +250,6 @@ async def get_text(message: Message, state: FSMContext):
 
     except Exception as e:
         print("ERROR:", e)
-
-    # State clear
-    await state.clear()
-
-    # Restart keyboard
-    restart_kb = ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="➕ Yangi murojaat")]
-        ],
-        resize_keyboard=True
-    )
-
-    # User answer
-    await message.answer(
-        f"✅ Murojaatingiz qabul qilindi.\n"
-        f"✅ Ваше обращение принято.\n\n"
-
-        f"🆔 ID: #{appeal_id}\n\n"
-
-        f"📨 Murojaatingiz mas'ul xodimlarga yuborildi.\n"
-        f"📨 Ваше обращение направлено ответственным сотрудникам.\n\n"
-
-        f"ℹ️ Zarurat bo‘lsa siz bilan bog‘laniladi.\n"
-        f"ℹ️ При необходимости с вами свяжутся.",
-
-        reply_markup=restart_kb
-    )
 
 # STATISTIKA
 @dp.message(lambda message: message.text == "/stat")
