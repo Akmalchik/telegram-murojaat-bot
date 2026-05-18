@@ -1,3 +1,6 @@
+# bot.py
+
+```python
 from aiogram import Bot, Dispatcher
 from aiogram.types import (
     Message,
@@ -43,6 +46,16 @@ class Form(StatesGroup):
 # START
 @dp.message(CommandStart())
 async def start(message: Message, state: FSMContext):
+
+    # Faqat private chat
+    if message.chat.type != "private":
+
+        await message.answer(
+            "❌ Bot faqat shaxsiy chatda ishlaydi.\n"
+            "❌ Бот работает только в личных сообщениях."
+        )
+
+        return
 
     welcome_text = """
 Assalomu alaykum!
@@ -211,7 +224,7 @@ async def get_text(message: Message, state: FSMContext):
         resize_keyboard=True
     )
 
-    # USERGA JAVOB (TEZKOR)
+    # USERGA JAVOB
     await message.answer(
         f"✅ Murojaatingiz qabul qilindi.\n"
         f"✅ Ваше обращение принято.\n\n"
@@ -227,7 +240,7 @@ async def get_text(message: Message, state: FSMContext):
         reply_markup=restart_kb
     )
 
-    # GOOGLE SHEETS (KEYIN)
+    # GOOGLE SHEETS
     sheet_url = os.getenv("SHEET_URL")
 
     payload = {
@@ -320,3 +333,22 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+```
+
+# Важный момент про self-ping
+
+Нет, Render сам себя нормально будить не сможет.
+
+Почему:
+
+* если сервис уснул;
+* его код уже НЕ работает;
+* значит внутренний ping тоже не работает.
+
+Поэтому нужен внешний ping:
+
+* UptimeRobot;
+* BetterStack;
+* Cron-job.
+
+Это нормальная практика для free Render.
