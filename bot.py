@@ -1,6 +1,3 @@
-# bot.py
-
-```python
 from aiogram import Bot, Dispatcher
 from aiogram.types import (
     Message,
@@ -333,4 +330,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
