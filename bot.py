@@ -33,6 +33,33 @@ appeal_counter = 1
 # Statistika
 appeals_data = []
 
+# Mahallalar
+MAHALLALAR = [
+    "Bekobod MFY",
+    "Saidobod MFY",
+    "Chimqo‘rg‘on MFY",
+    "Murot Ali MFY",
+    "Fayzobod MFY",
+    "Do‘ngqo‘rg‘on MFY",
+    "Mo‘minobod MFY",
+    "Birlik MFY",
+    "Yangiobod MFY",
+    "Ko‘lota MFY",
+    "Guliston MFY",
+    "Navoiy MFY",
+    "Lolaariq MFY",
+    "Ming tepa MFY",
+    "G‘ayrat MFY",
+    "Do‘stlik MFY",
+    "Oqtepa MFY",
+    "Mitan MFY",
+    "Oybek MFY",
+    "Kultepa MFY",
+    "Mustaqillik MFY",
+    "Taraqqiyot MFY",
+    "Oqtom MFY"
+]
+
 # STATES
 class Form(StatesGroup):
     fullname = State()
@@ -95,39 +122,38 @@ Ma'lumotlaringiz mas'ul xodimlarga yuboriladi.
 @dp.message(Form.fullname)
 async def get_name(message: Message, state: FSMContext):
 
-    await state.update_data(fullname=message.text)
+    name = message.text.strip()
+
+    # Faqat harf
+    if not all(
+        char.isalpha() or char.isspace()
+        for char in name
+    ):
+
+        await message.answer(
+            "❌ F.I.O faqat harflardan iborat bo‘lishi kerak.\n"
+            "❌ Ф.И.О должно содержать только буквы."
+        )
+
+        return
+
+    await state.update_data(fullname=name)
+
+    mahalla_keyboard = []
+
+    for mahalla in MAHALLALAR:
+        mahalla_keyboard.append(
+            [KeyboardButton(text=mahalla)]
+        )
 
     mahalla_kb = ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="Bekobod MFY")],
-            [KeyboardButton(text="Saidobod MFY")],
-            [KeyboardButton(text="Chimqo‘rg‘on MFY")],
-            [KeyboardButton(text="Murot Ali MFY")],
-            [KeyboardButton(text="Fayzobod MFY")],
-            [KeyboardButton(text="Do‘ngqo‘rg‘on MFY")],
-            [KeyboardButton(text="Mo‘minobod MFY")],
-            [KeyboardButton(text="Birlik MFY")],
-            [KeyboardButton(text="Yangiobod MFY")],
-            [KeyboardButton(text="Ko‘lota MFY")],
-            [KeyboardButton(text="Guliston MFY")],
-            [KeyboardButton(text="Navoiy MFY")],
-            [KeyboardButton(text="Lolaariq MFY")],
-            [KeyboardButton(text="Ming tepa MFY")],
-            [KeyboardButton(text="G‘ayrat MFY")],
-            [KeyboardButton(text="Do‘stlik MFY")],
-            [KeyboardButton(text="Oqtepa MFY")],
-            [KeyboardButton(text="Mitan MFY")],
-            [KeyboardButton(text="Oybek MFY")],
-            [KeyboardButton(text="Kultepa MFY")],
-            [KeyboardButton(text="Mustaqillik MFY")],
-            [KeyboardButton(text="Taraqqiyot MFY")],
-            [KeyboardButton(text="Oqtom MFY")]
-        ],
+        keyboard=mahalla_keyboard,
         resize_keyboard=True
     )
 
     await message.answer(
-        "🏠 Mahallani tanlang / Выберите махаллю:",
+        "🏠 Mahallani tanlang yoki yozing:\n"
+        "🏠 Выберите или напишите махаллю:",
         reply_markup=mahalla_kb
     )
 
@@ -137,7 +163,19 @@ async def get_name(message: Message, state: FSMContext):
 @dp.message(Form.mahalla)
 async def get_mahalla(message: Message, state: FSMContext):
 
-    await state.update_data(mahalla=message.text)
+    mahalla = message.text.strip()
+
+    # Agar listda bo‘lmasa
+    if mahalla not in MAHALLALAR:
+
+        await message.answer(
+            "❌ Mahalla ro‘yxatda topilmadi.\n"
+            "❌ Махалля не найдена в списке."
+        )
+
+        return
+
+    await state.update_data(mahalla=mahalla)
 
     phone_kb = ReplyKeyboardMarkup(
         keyboard=[
@@ -152,7 +190,8 @@ async def get_mahalla(message: Message, state: FSMContext):
     )
 
     await message.answer(
-        "📞 Telefon raqam yuboring / Отправьте номер телефона:",
+        "📞 Telefon raqam yuboring yoki yozing:\n"
+        "📞 Отправьте или напишите номер телефона:",
         reply_markup=phone_kb
     )
 
@@ -165,12 +204,13 @@ async def get_phone(message: Message, state: FSMContext):
     if message.contact:
         phone = message.contact.phone_number
     else:
-        phone = message.text
+        phone = message.text.strip()
 
     await state.update_data(phone=phone)
 
     await message.answer(
-        "📝 Murojaatingizni yozing / Напишите обращение:",
+        "📝 Murojaatingizni yozing:\n"
+        "📝 Напишите обращение:",
         reply_markup=ReplyKeyboardRemove()
     )
 
@@ -221,7 +261,7 @@ async def get_text(message: Message, state: FSMContext):
         resize_keyboard=True
     )
 
-    # USERGA JAVOB
+    # USER RESPONSE
     await message.answer(
         f"✅ Murojaatingiz qabul qilindi.\n"
         f"✅ Ваше обращение принято.\n\n"
