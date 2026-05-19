@@ -1,3 +1,11 @@
+import os
+import re
+import asyncio
+import aiohttp
+from dotenv import load_dotenv
+from collections import Counter
+from aiohttp import web
+
 from aiogram import Bot, Dispatcher
 from aiogram.types import (
     Message,
@@ -9,76 +17,57 @@ from aiogram.filters import CommandStart
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
-from dotenv import load_dotenv
-from collections import Counter
-from aiohttp import web
+from aiogram.utils.keyboard import ReplyKeyboardBuilder
 
-import asyncio
-import os
-import requests
-
-# ENV yuklash
+# Загрузка переменных окружения из файла .env
 load_dotenv()
 
 TOKEN = os.getenv("BOT_TOKEN")
 GROUP_ID = int(os.getenv("GROUP_ID"))
+SHEET_URL = os.getenv("SHEET_URL")
 
-# BOT
+# Инициализация бота и диспетчера с хранилищем в оперативной памяти
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# Murojaat ID
-appeal_counter = 1
-
-# Statistika
+# Глобальный список для хранения махаллей отправленных обращений (для статистики)
 appeals_data = []
 
-# Mahallalar
+# Множество для защиты активных asyncio-тасков от удаления сборщиком мусора
+active_tasks = set()
+
+# Глобальные буферы для накопления медиа и текста при прерывистом вводе
+message_buffers = {}  # Хранит списки текстовых строк для каждого пользователя
+photo_buffers = {}    # Хранит списки file_id фотографий для каждого пользователя
+message_tasks = {}    # Хранит активные таски таймера отправки (asyncio.Task)
+
+# Список махаллей Пскентского района для клавиатуры
 MAHALLALAR = [
-    "Bekobod MFY",
-    "Saidobod MFY",
-    "Chimqo‘rg‘on MFY",
-    "Murot Ali MFY",
-    "Fayzobod MFY",
-    "Do‘ngqo‘rg‘on MFY",
-    "Mo‘minobod MFY",
-    "Birlik MFY",
-    "Yangiobod MFY",
-    "Ko‘lota MFY",
-    "Guliston MFY",
-    "Navoiy MFY",
-    "Lolaariq MFY",
-    "Ming tepa MFY",
-    "G‘ayrat MFY",
-    "Do‘stlik MFY",
-    "Oqtepa MFY",
-    "Mitan MFY",
-    "Oybek MFY",
-    "Kultepa MFY",
-    "Mustaqillik MFY",
-    "Taraqqiyot MFY",
-    "Oqtom MFY"
+    "Bekobod MFY", "Saidobod MFY", "Chimqo‘rg‘on MFY", "Murot Ali MFY",
+    "Fayzobod MFY", "Do‘ngqo‘rg‘on MFY", "Mo‘minobod MFY", "Birlik MFY",
+    "Yangiobod MFY", "Ko‘lota MFY", "Guliston MFY", "Navoiy MFY",
+    "Lolaariq MFY", "Ming tepa MFY", "G‘ayrat MFY", "Do‘stlik MFY",
+    "Oqtepa MFY", "Mitan MFY", "Oybek MFY", "Kultepa MFY",
+    "Mustaqillik MFY", "Taraqqiyot MFY", "Oqtom MFY"
 ]
 
-# STATES
+# Машина состояний (FSM) для контекстного опроса жителя
 class Form(StatesGroup):
-    fullname = State()
-    mahalla = State()
-    phone = State()
-    text = State()
+    fullname = State()  # Ожидание ввода Ф.И.О.
+    mahalla = State()   # Ожидание выбора махалли
+    phone = State()     # Ожидание номера телефона
+    text = State()      # Ожидание текста обращения и фото
 
-# START
+# Хэндлер команды /start
 @dp.message(CommandStart())
 async def start(message: Message, state: FSMContext):
 
-    # Faqat private chat
+    # Бот должен обрабатывать обращения только в личных сообщениях
     if message.chat.type != "private":
-
         await message.answer(
             "❌ Bot faqat shaxsiy chatda ishlaydi.\n"
             "❌ Бот работает только в личных сообщениях."
         )
-
         return
 
     welcome_text = """
@@ -87,12 +76,10 @@ Assalomu alaykum!
 Siz tuman hokimligining murojaatlar botiga murojaat qildingiz.
 
 Ushbu bot orqali:
-- muammo,
-- taklif,
-- shikoyat,
-- va boshqa murojaatlarni yuborishingiz mumkin.
-
-Ma'lumotlaringiz mas'ul xodimlarga yuboriladi.
+• muammo
+• taklif
+• shikoyat
+• va boshqa murojaatlarni yuborishingiz mumkin.
 
 ————————————
 
@@ -101,82 +88,67 @@ Ma'lumotlaringiz mas'ul xodimlarga yuboriladi.
 Вы обратились в бот обращений районного хокимията.
 
 Через данного бота вы можете отправить:
-- проблему,
-- предложение,
-- жалобу,
-- и другие обращения.
-
-Ваше обращение будет направлено ответственным сотрудникам.
+• проблему
+• предложение
+• жалобу
+• и другие обращения.
 """
-
     await message.answer(welcome_text)
-
     await message.answer(
-        "👤 Davom etish uchun F.I.O kiriting.\n"
-        "👤 Для продолжения введите Ф.И.О."
+        "👤 F.I.O kiriting:\n"
+        "👤 Введите Ф.И.О."
     )
-
+    # Переводим пользователя в состояние ожидания имени
     await state.set_state(Form.fullname)
 
-# FIO
+# Хэндлер ввода Ф.И.О.
 @dp.message(Form.fullname)
 async def get_name(message: Message, state: FSMContext):
-
     name = message.text.strip()
 
-    # Faqat harf
-    if not all(
-        char.isalpha() or char.isspace()
-        for char in name
-    ):
-
+    # Регулярка валидации: поддерживает кириллицу, латиницу, узбекские апострофы и дефисы
+    if not re.fullmatch(r"[A-Za-zА-Яа-яЁёЎўҚқҒғҲҳİıŞşÇçÖöÜü'‘’\- ]+", name):
         await message.answer(
-            "❌ F.I.O faqat harflardan iborat bo‘lishi kerak.\n"
-            "❌ Ф.И.О должно содержать только буквы."
+            "❌ F.I.O noto‘g‘ri formatda.\n"
+            "❌ Неверный формат Ф.И.О."
         )
-
         return
 
+    # Сохраняем имя в контекст FSM
     await state.update_data(fullname=name)
 
-    mahalla_keyboard = []
-
+    # Динамическое построение красивой клавиатуры махаллей в 2 колонки
+    builder = ReplyKeyboardBuilder()
     for mahalla in MAHALLALAR:
-        mahalla_keyboard.append(
-            [KeyboardButton(text=mahalla)]
-        )
+        builder.add(KeyboardButton(text=mahalla))
+    builder.adjust(2)
 
-    mahalla_kb = ReplyKeyboardMarkup(
-        keyboard=mahalla_keyboard,
-        resize_keyboard=True
-    )
+    mahalla_kb = builder.as_markup(resize_keyboard=True)
 
     await message.answer(
         "🏠 Mahallani tanlang yoki yozing:\n"
         "🏠 Выберите или напишите махаллю:",
         reply_markup=mahalla_kb
     )
-
+    # Переводим в состояние ожидания махалли
     await state.set_state(Form.mahalla)
 
-# MAHALLA
+# Хэндлер выбора махалли
 @dp.message(Form.mahalla)
 async def get_mahalla(message: Message, state: FSMContext):
-
     mahalla = message.text.strip()
 
-    # Agar listda bo‘lmasa
+    # Строгая проверка на присутствие махалли в утвержденном списке
     if mahalla not in MAHALLALAR:
-
         await message.answer(
             "❌ Mahalla ro‘yxatda topilmadi.\n"
             "❌ Махалля не найдена в списке."
         )
-
         return
 
     await state.update_data(mahalla=mahalla)
 
+    # Клавиатура для быстрой отправки контакта в один клик
     phone_kb = ReplyKeyboardMarkup(
         keyboard=[
             [
@@ -191,16 +163,16 @@ async def get_mahalla(message: Message, state: FSMContext):
 
     await message.answer(
         "📞 Telefon raqam yuboring yoki yozing:\n"
-        "📞 Отправьте или напишите номер телефона:",
+        "📞 Отправьте или напишите номер:",
         reply_markup=phone_kb
     )
-
+    # Переводим в состояние ожидания телефона
     await state.set_state(Form.phone)
 
-# PHONE
+# Хэндлер получения номера телефона
 @dp.message(Form.phone)
 async def get_phone(message: Message, state: FSMContext):
-
+    # Проверяем, как отправлен номер: кнопкой-контактом или обычным текстом
     if message.contact:
         phone = message.contact.phone_number
     else:
@@ -208,33 +180,47 @@ async def get_phone(message: Message, state: FSMContext):
 
     await state.update_data(phone=phone)
 
+    # Удаляем старую клавиатуру, подготавливая чат к свободному вводу текста/медиа
     await message.answer(
-        "📝 Murojaatingizni yozing:\n"
-        "📝 Напишите обращение:",
+        "📝 Murojaatingizni yozing.\n"
+        "📷 Rasm yuborishingiz ham mumkin.\n\n"
+        "📝 Напишите обращение.\n"
+        "📷 Можно также отправить фото.",
         reply_markup=ReplyKeyboardRemove()
     )
-
+    # Переводим в финальное состояние сбора обращения
     await state.set_state(Form.text)
 
-# TEXT
-@dp.message(Form.text)
-async def get_text(message: Message, state: FSMContext):
+# Асинхронная функция финализации и отправки обращения (вызывается по таймеру)
+async def send_appeal(user_id, state):
+    # Анти-спам задержка: ждем 5 секунд. Если придут новые сообщения, этот таск отменится
+    await asyncio.sleep(5)
 
-    global appeal_counter
+    try:
+        # Вытаскиваем накопленные данные из FSM context
+        data = await state.get_data()
+        
+        # Получаем данные из буферов (если пусто — возвращаем пустой список)
+        texts = message_buffers.get(user_id, [])
+        photos = photo_buffers.get(user_id, [])
 
-    await state.update_data(text=message.text)
+        # Если пользователь умудрился сбросить буфер до завершения таска, выходим
+        if not texts and not photos:
+            return
 
-    data = await state.get_data()
+        # Склеиваем весь присланный текст через перенос строки
+        full_text = "\n".join(texts) if texts else "📷 Murojaat faqat rasmdan iborat / Обращение состоит только из фото"
 
-    # Statistika
-    appeals_data.append({
-        "mahalla": data['mahalla']
-    })
+        # Фиксируем махаллю в глобальной статистике оперативной памяти
+        appeals_data.append({
+            "mahalla": data['mahalla']
+        })
 
-    appeal_id = str(appeal_counter).zfill(5)
-    appeal_counter += 1
+        # Генерируем уникальный ID на основе общей длины накопленных данных
+        appeal_id = str(len(appeals_data)).zfill(5)
 
-    result = f"""
+        # Формируем красивый шаблон сообщения для группы хокимията
+        result = f"""
 📨 Yangi murojaat / Новое обращение
 
 🆔 ID: #{appeal_id}
@@ -244,129 +230,172 @@ async def get_text(message: Message, state: FSMContext):
 📞 Telefon: {data['phone']}
 
 📝 Murojaat / Обращение:
-{data['text']}
+{full_text}
 """
 
-    # Telegram group
-    await bot.send_message(GROUP_ID, result)
+        # 1. Отправляем текстовые данные в рабочую группу хокимията
+        await bot.send_message(GROUP_ID, result)
 
-    # State clear
-    await state.clear()
+        # 2. Если в буфере есть фотографии, пересылаем их в группу по очереди
+        for photo_id in photos:
+            await bot.send_photo(GROUP_ID, photo_id)
 
-    # Restart keyboard
-    restart_kb = ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="➕ Yangi murojaat")]
-        ],
-        resize_keyboard=True
-    )
-
-    # USER RESPONSE
-    await message.answer(
-        f"✅ Murojaatingiz qabul qilindi.\n"
-        f"✅ Ваше обращение принято.\n\n"
-
-        f"🆔 ID: #{appeal_id}\n\n"
-
-        f"📨 Murojaatingiz mas'ul xodimlarga yuborildi.\n"
-        f"📨 Ваше обращение направлено ответственным сотрудникам.\n\n"
-
-        f"ℹ️ Zarurat bo‘lsa siz bilan bog‘laniladi.\n"
-        f"ℹ️ При необходимости с вами свяжутся.",
-
-        reply_markup=restart_kb
-    )
-
-    # GOOGLE SHEETS
-    sheet_url = os.getenv("SHEET_URL")
-
-    payload = {
-        "id": appeal_id,
-        "fullname": data['fullname'],
-        "mahalla": data['mahalla'],
-        "phone": data['phone'],
-        "text": data['text']
-    }
-
-    try:
-        response = requests.post(
-            sheet_url,
-            json=payload,
-            timeout=5
+        # 3. Уведомляем жителя об успешной регистрации обращения
+        restart_kb = ReplyKeyboardMarkup(
+            keyboard=[
+                [KeyboardButton(text="➕ Yangi murojaat")]
+            ],
+            resize_keyboard=True
         )
 
-        print("STATUS:", response.status_code)
-        print("RESPONSE:", response.text)
+        await bot.send_message(
+            user_id,
+            f"✅ Murojaatingiz qabul qilindi.\n"
+            f"✅ Ваше обращение принято.\n\n"
+            f"🆔 ID: #{appeal_id}\n\n"
+            f"📨 Murojaatingiz mas'ul xodimlarga yuborildi.\n"
+            f"📨 Ваше обращение направлено ответственным сотрудникам.",
+            reply_markup=restart_kb
+        )
 
-    except Exception as e:
-        print("ERROR:", e)
+        # 4. Асинхронно логируем данные в Google Sheets без блокировки основного потока
+        payload = {
+            "id": appeal_id,
+            "fullname": data['fullname'],
+            "mahalla": data['mahalla'],
+            "phone": data['phone'],
+            "text": full_text
+        }
 
-# STATISTIKA
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.post(SHEET_URL, json=payload, timeout=5) as response:
+                    if response.status != 200:
+                        print(f"Ошибка Google Sheets API: {response.status}")
+            except Exception as e:
+                print("Критическая ошибка при отправке в Google Sheets:", e)
+
+        # 5. Очищаем состояние FSM и буферы СТРОГО в самом конце успешной отправки!
+        await state.clear()
+        message_buffers.pop(user_id, None)
+        photo_buffers.pop(user_id, None)
+        message_tasks.pop(user_id, None)
+
+    except asyncio.CancelledError:
+        # Перехватываем отмену таска. Происходит, когда пользователь дописал сообщение в течение 5 секунд
+        pass
+
+# Хэндлер накопления контента обращения (принимает текст, фото и подписи к фото)
+@dp.message(Form.text)
+async def get_text(message: Message, state: FSMContext):
+    user_id = message.from_user.id
+
+    # Инициализируем пустые списки в буфере, если пользователь пишет впервые
+    if user_id not in message_buffers:
+        message_buffers[user_id] = []
+    if user_id not in photo_buffers:
+        photo_buffers[user_id] = []
+
+    # Флаг для проверки, валидный ли тип сообщения прислал пользователь
+    valid_content = False
+
+    # Если пришел чистый текст
+    if message.text:
+        message_buffers[user_id].append(message.text)
+        valid_content = True
+
+    # Если пришло фото с подписью (caption)
+    if message.caption:
+        message_buffers[user_id].append(message.caption)
+        valid_content = True
+
+    # Если пришло фото (захватываем самый максимальный размер из массива)
+    if message.photo:
+        largest_photo = message.photo[-1].file_id
+        photo_buffers[user_id].append(largest_photo)
+        valid_content = True
+
+    # Если юзер отправил неподдерживаемый контент (стикер, локацию, войс, документ)
+    if not valid_content:
+        await message.answer(
+            "❌ Faqat matn yoki rasm yuboring.\n"
+            "❌ Отправьте только текст или фото."
+        )
+        return
+
+    # Сброс (отмена) предыдущего таймера отправки, если пользователь продолжает писать/скидывать медиа
+    old_task = message_tasks.get(user_id)
+    if old_task:
+        old_task.cancel()
+
+    # Создаем новую задачу планирования отправки обращения через 5 секунд
+    task = asyncio.create_task(send_appeal(user_id, state))
+    
+    # Регистрируем таск в глобальном set, чтобы защитить его от Garbage Collector
+    active_tasks.add(task)
+    task.add_done_callback(active_tasks.discard)
+
+    # Запоминаем текущий таск пользователя для возможности его отмены на следующем шаге
+    message_tasks[user_id] = task
+
+# Административный хэндлер вызова внутренней статистики (доступен только внутри группы хокимията)
 @dp.message(lambda message: message.text == "/stat")
 async def statistics(message: Message):
-
     if message.chat.id != GROUP_ID:
         return
 
     total = len(appeals_data)
+    
+    # Считаем количество упоминаний каждой махалли
+    mahalla_counter = Counter(item['mahalla'] for item in appeals_data)
 
-    mahalla_counter = Counter(
-        item['mahalla']
-        for item in appeals_data
+    stat_text = (
+        f"📊 Statistika / Статистика\n\n"
+        f"📝 Jami murojaatlar (Всего обращений): {total}\n\n"
     )
-
-    stat_text = "📊 Statistika\n\n"
-    stat_text += f"📝 Jami murojaatlar: {total}\n\n"
-    stat_text += "🏠 Mahallalar:\n\n"
 
     for mahalla, count in mahalla_counter.items():
         stat_text += f"{mahalla} — {count}\n"
 
     await message.answer(stat_text)
 
-# RESTART
+# Хэндлер кнопки перезапуска формы для отправки повторного обращения
 @dp.message(lambda message: message.text == "➕ Yangi murojaat")
 async def restart_form(message: Message, state: FSMContext):
-
     await message.answer(
-        "👤 F.I.O kiriting.\n"
+        "👤 F.I.O kiriting:\n"
         "👤 Введите Ф.И.О.",
         reply_markup=ReplyKeyboardRemove()
     )
-
     await state.set_state(Form.fullname)
 
-# HEALTH CHECK
+# Эндпоинт для прохождения проверки работоспособности (Health Check) на хостингах
 async def health_check(request):
     return web.Response(text="Bot is running")
 
-# WEB SERVER
+# Инициализация и запуск фонового веб-сервера aiohttp
 async def start_web_server():
-
     app = web.Application()
     app.router.add_get("/", health_check)
-
+    
     runner = web.AppRunner(app)
     await runner.setup()
 
+    # Извлечение порта из переменных среды хостинга (по умолчанию 10000 для Render)
     port = int(os.environ.get("PORT", 10000))
-
-    site = web.TCPSite(
-        runner,
-        "0.0.0.0",
-        port
-    )
-
+    site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
 
-# MAIN
+# Главная точка входа в приложение (Main)
 async def main():
-
-    print("✅ Bot ishga tushdi...")
-
+    print("✅ Бот успешно запущен и готов к работе...")
+    
+    # Параллельно поднимаем веб-сервер для удержания деплоя в онлайне
     await start_web_server()
-
+    
+    # Запускаем лонг-поллинг (прослушивание серверов Telegram)
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
+    # Запуск асинхронного цикла событий
     asyncio.run(main())
