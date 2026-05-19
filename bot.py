@@ -368,6 +368,31 @@ async def restart_form(message: Message, state: FSMContext):
         reply_markup=ReplyKeyboardRemove()
     )
     await state.set_state(Form.fullname)
+# Fallback handler после завершённого обращения
+@dp.message()
+async def unknown_message(message: Message):
+
+    # Игнорируем группы
+    if message.chat.type != "private":
+        return
+
+    await message.answer(
+        "ℹ️ Sizning murojaatingiz allaqachon yuborilgan.\n\n"
+
+        "➕ Yangi murojaat yuborish uchun:\n"
+        "- “➕ Yangi murojaat” tugmasini bosing\n"
+        "yoki\n"
+        "- /start buyrug‘ini yuboring.\n\n"
+
+        "————————————\n\n"
+
+        "ℹ️ Ваше обращение уже отправлено.\n\n"
+
+        "➕ Чтобы создать новое обращение:\n"
+        "- нажмите кнопку “➕ Yangi murojaat”\n"
+        "или\n"
+        "- отправьте команду /start"
+    )
 
 # Эндпоинт для прохождения проверки работоспособности (Health Check) на хостингах
 async def health_check(request):
