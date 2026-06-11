@@ -550,16 +550,20 @@ async def get_text(message: Message, state: FSMContext):
 # ============================================================
 
 def _admin_only(handler):
+    """Декоратор: разрешает вызов только внутри рабочей группы хокимията или админам в личке."""
     async def wrapper(message: Message, **kwargs):
-        if not _is_admin(message.chat.id):
+        # Если команда написана в группе хокимията или её пишет админ из списка ADMIN_IDS
+        if message.chat.id == GROUP_ID or message.from_user.id in ADMIN_IDS:
+            await handler(message, **kwargs)
             return
-        await handler(message, **kwargs)
+        # Во всех остальных случаях (чужие люди в боте) — игнорируем
+        return
     return wrapper
 
 
 @dp.message(lambda m: m.text == "/stat")
 @_admin_only
-async def cmd_stat(message: Message):
+async def cmd_stat(message: Message, **kwargs):
     google_script_url = os.getenv("SHEET_URL")
     
     if not google_script_url:
@@ -583,19 +587,18 @@ async def cmd_stat(message: Message):
                     today = data.get("today", 0)
                     
                     text = (
-                        "📊 **Murojaatlar Statistikasi / Статистика обращений**\n\n"
-                        f"📝 **Jami / Всего:** {total}\n"
-                        f"📅 **Shu oyda / В этом месяце:** {month}\n"
-                        f"📌 **Bugun / Сегодня:** {today}"
+                        "📊 <b>Murojaatlar Statistikasi / Статистика обращений</b>\n\n"
+                        f"📝 <b>Jami / Всего:</b> {total}\n"
+                        f"📅 <b>Shu oyda / В этом месяце:</b> {month}\n"
+                        f"📌 <b>Bugun / Сегодня:</b> {today}"
                     )
                     
-                    await message.answer(text, parse_mode="Markdown")
+                    await message.answer(text, parse_mode="HTML")
                 else:
                     await message.answer("❌ Ma'lumotlarni olib bo'lmadi. / Не удалось получить данные.")
     except Exception as e:
         print(f"Ошибка статистики: {e}")
-        await message.answer("❌ Tizimда xatolik yuz berdi. / Произошла ошибка в системе.")
-
+        await message.answer("❌ Tizimda xatolik yuz berdi. / Произошла ошибка в системе.")
 # ============================================================
 # RESTART FORM
 # ============================================================
