@@ -594,7 +594,7 @@ async def cmd_stat(message: Message):
                     await message.answer("❌ Ma'lumotlarni olib bo'lmadi. / Не удалось получить данные.")
     except Exception as e:
         print(f"Ошибка статистики: {e}")
-        await message.answer("❌ Tizimda xatolik yuz berdi. / Произошла ошибка в системе.")
+        await message.answer("❌ Tizimда xatolik yuz berdi. / Произошла ошибка в системе.")
 
 # ============================================================
 # RESTART FORM
@@ -630,12 +630,15 @@ async def unknown_message(message: Message):
     )
 
 # ============================================================
-# WEB SERVER & MAIN
+# HEALTH CHECK
 # ============================================================
 
 async def health_check(request):
     return web.Response(text="OK")
 
+# ============================================================
+# WEB SERVER
+# ============================================================
 
 async def start_web_server() -> None:
     app = web.Application()
@@ -646,6 +649,9 @@ async def start_web_server() -> None:
     await web.TCPSite(runner, "0.0.0.0", port).start()
     logger.info("✅ Веб-сервер запущен на порту %s", port)
 
+# ============================================================
+# MAIN
+# ============================================================
 
 async def main() -> None:
     db_init()
