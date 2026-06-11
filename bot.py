@@ -43,7 +43,7 @@ from aiogram.types import (
     ReplyKeyboardRemove,
     InputMediaPhoto,
 )
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, Command
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -154,7 +154,7 @@ def db_init() -> None:
                 attachments_json TEXT
             );
 
-            -- Организации (foundation для situational center)
+            -- Organizations (foundation для situational center)
             CREATE TABLE IF NOT EXISTS organizations (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 name        TEXT    NOT NULL,
@@ -476,7 +476,7 @@ async def openai_classify(text: str) -> dict | None:
         return None
 
     try:
-                response = await asyncio.wait_for(
+        response = await asyncio.wait_for(
             ai_client.chat.completions.create(
                 model=OPENAI_MODEL,
                 messages=[
@@ -490,7 +490,6 @@ async def openai_classify(text: str) -> dict | None:
         )
 
         raw = (response.choices[0].message.content or "").strip()
-
         logger.info("GPT RAW RESPONSE: %s", raw)
 
         # Удаляем markdown fences
@@ -499,15 +498,10 @@ async def openai_classify(text: str) -> dict | None:
         # ----------------------------------------------------
         # SAFE JSON PARSING
         # ----------------------------------------------------
-
         try:
             data = json.loads(raw)
-
-            # GPT иногда возвращает JSON string:
-            # "{\"category\":\"Газ\"}"
             if isinstance(data, str):
                 data = json.loads(data)
-
         except Exception:
             logger.warning("GPT вернул невалидный JSON: %s", raw)
             return None
@@ -515,28 +509,23 @@ async def openai_classify(text: str) -> dict | None:
         # ----------------------------------------------------
         # SAFE NORMALIZATION
         # ----------------------------------------------------
-
         data = {
             "category": data.get("category", "Другое"),
             "urgency": data.get("urgency", "Средняя"),
             "sentiment": data.get("sentiment", "neutral"),
             "resonance_risk": data.get("resonance_risk", "low"),
-            "summary": data.get(
-                "summary",
-                text[:120]
-            ),
+            "summary": data.get("summary", text[:120]),
             "classifier": "openai",
         }
 
         logger.info("GPT NORMALIZED: %s", data)
-
         return data
 
-        except asyncio.TimeoutError:
+    except asyncio.TimeoutError:
         logger.warning("OpenAI timeout")
-        except json.JSONDecodeError as exc:
+    except json.JSONDecodeError as exc:
         logger.warning("OpenAI невалидный JSON: %s", exc)
-        except Exception as exc:
+    except Exception as exc:
         msg = str(exc).lower()
         if any(kw in msg for kw in ("quota", "billing", "rate_limit", "insufficient_quota")):
             _AI_DEGRADED = True
@@ -544,7 +533,7 @@ async def openai_classify(text: str) -> dict | None:
         else:
             logger.warning("OpenAI ошибка: %s", exc)
 
-        return None
+    return None
 
 
 async def analyze_appeal(text: str) -> dict:
@@ -834,7 +823,6 @@ async def get_mahalla(message: Message, state: FSMContext):
 
     await state.update_data(mahalla=mahalla)
 
-    # Явно убираем предыдущую клавиатуру и показываем только кнопку телефона
     await message.answer(
         "✅ Mahalla tanlandi!\n✅ Махалля выбрана!",
         reply_markup=ReplyKeyboardRemove(),
@@ -979,25 +967,19 @@ async def send_appeal(user_id: int, state: FSMContext) -> None:
 
         group_msg = (
             f"📨 Yangi murojaat\n\n"
-
             f"🆔 ID: #{appeal_id}\n\n"
-
             f"👤 F.I.O: {data['fullname']}\n"
             f"🏠 Mahalla: {data['mahalla']}\n"
             f"📞 Telefon: {data['phone']}\n\n"
-
             f"📂 Kategoriya: {category_uz}\n"
             f"{ue} Muhimlik: {urgency_uz}\n"
             f"{se} Kayfiyat: {sentiment_uz}\n"
             f"{re_} Rezonans xavfi: {resonance_uz}\n"
             f"{cl_badge}\n\n"
-
             f"🧠 AI Xulosa:\n{summary}\n\n"
-
             f"👤 Telegram: {tg_name}\n"
             f"🔗 Username: {username}\n"
             f"🆔 Telegram ID: {user_id}\n\n"
-
             f"📝 Murojaat:\n{full_text}"
         )
         await bot.send_message(GROUP_ID, group_msg)
@@ -1029,7 +1011,6 @@ async def send_appeal(user_id: int, state: FSMContext) -> None:
                     resize_keyboard=True,
                 ),
             )
-
         except Exception as confirm_exc:
             logger.error(
                 "Foydalanuvchiga tasdiq yuborilmadi user_id=%s: %s",
@@ -1051,7 +1032,6 @@ async def send_appeal(user_id: int, state: FSMContext) -> None:
     except asyncio.CancelledError:
         logger.info("Задача отменена user_id=%s", user_id)
         raise
-
     except Exception as exc:
         logger.exception("Ошибка send_appeal user_id=%s: %s", user_id, exc)
         try:
@@ -1062,7 +1042,6 @@ async def send_appeal(user_id: int, state: FSMContext) -> None:
             )
         except Exception:
             pass
-
     finally:
         await state.clear()
         _clean_buffers(user_id)
@@ -1155,7 +1134,7 @@ async def cmd_stat(message: Message):
                     
     except Exception as e:
         print(f"Ошибка статистики: {e}")
-        await message.answer("❌ Tizimda xatolik yuz berdi. / Произошла ошибка в системе.")
+        await message.answer("❌ Tizimда xatolik yuz berdi. / Произошла ошибка в системе.")
 
 
 @dp.message(lambda m: m.text == "/top")
