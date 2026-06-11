@@ -83,6 +83,7 @@ class Form(StatesGroup):
 
 @dp.message(CommandStart())
 async def start(message: Message, state: FSMContext):
+    # Проверка: если пишут в группе, бот вежливо отказывает
     if message.chat.type != "private":
         await message.answer(
             "❌ Bot faqat shaxsiy chatda ishlaydi.\n"
@@ -90,36 +91,34 @@ async def start(message: Message, state: FSMContext):
         )
         return
 
-    welcome_text = """
-Siz tuman hokimligining murojaatlar botiga murojaat qilmoqchimisiz?.
+    # Сбрасываем старое состояние, если пользователь решил начать заново
+    await state.clear()
 
-Ushbu bot orqali:
-
-Ushbu bot orqali:
-• muammo
-• taklif
-• shikoyat
-• va boshqa murojaatlarni yuborishingiz mumkin.
-
-————————————
-
-Здравствуйте!
-
-Вы хотите обратиться в бот обращений районного хокимията?
-
-Через данного бота вы можете отправить:
-• проблему
-• предложение
-• жалобу
-• и другие обращения.
-"""
-    await message.answer(welcome_text)
-    await message.answer(
+    # Собираем красивый, ровный текст без лишних скрытых пробелов
+    welcome_text = (
+        "Assalomu alaykum!\n\n"
+        "Siz tuman hokimligining murojaatlar botiga murojaat qilmoqchimisiz?\n\n"
+        "Ushbu bot orqali:\n"
+        "• muammo\n"
+        "• taklif\n"
+        "• shikoyat\n"
+        "• va boshqa murojaatlarni yuborishingiz mumkin.\n"
+        "____________________________\n\n"
+        "Здравствуйте!\n\n"
+        "Вы хотите обратиться в бот обращений районного хокимията?\n\n"
+        "Через данного бота вы можете отправить:\n"
+        "• проблему\n"
+        "• предложение\n"
+        "• жалобу\n"
+        "• и другие обращения.\n\n"
+        "————————————\n\n"
         "👤 F.I.O kiriting:\n"
-        "👤 Введите Ф.И.О."
+        "👤 Введите Ф.И.О.:"
     )
+    
+    # Отправляем всё одним аккуратным сообщением
+    await message.answer(welcome_text)
     await state.set_state(Form.fullname)
-
 # =========================
 # FULLNAME
 # =========================
