@@ -17,7 +17,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
     KeyboardButton,
     ReplyKeyboardRemove,
-    InputMediaPhoto  # Добавили для сборки альбомов
+    InputMediaPhoto
 )
 from aiogram.filters import CommandStart
 from aiogram.fsm.state import StatesGroup, State
@@ -75,6 +75,7 @@ class Form(StatesGroup):
     mahalla = State()
     phone = State()
     text = State()
+    sending = State()  # Новый стейт для блокировки спама во время отправки
 
 # =========================
 # START
@@ -82,7 +83,6 @@ class Form(StatesGroup):
 
 @dp.message(CommandStart())
 async def start(message: Message, state: FSMContext):
-
     if message.chat.type != "private":
         await message.answer(
             "❌ Bot faqat shaxsiy chatda ishlaydi.\n"
@@ -91,9 +91,9 @@ async def start(message: Message, state: FSMContext):
         return
 
     welcome_text = """
-Assalomu alaykum!
+Siz tuman hokimligining murojaatlar botiga murojaat qilmoqchimisiz?.
 
-Siz tuman hokimligining murojaatlar botiga murojaat qildingiz.
+Ushbu bot orqali:
 
 Ushbu bot orqali:
 • muammo
@@ -105,7 +105,7 @@ Ushbu bot orqali:
 
 Здравствуйте!
 
-Вы обратились в бот обращений районного хокимията.
+Вы хотите обратиться в бот обращений районного хокимията?
 
 Через данного бота вы можете отправить:
 • проблему
@@ -128,7 +128,8 @@ Ushbu bot orqali:
 async def get_name(message: Message, state: FSMContext):
     name = message.text.strip()
 
-    if not re.fullmatch(r"[A-Za-zА-Яа-яЁёЎўҚқҒғҲҳİıŞşÇçÖöÜü'‘’\- ]+", name):
+    # Смягчили регулярное выражение, добавив поддержку любых букв, точек и пробелов
+    if not re.fullmatch(r"[A-Za-zА-Яа-яЁёЎўҚқҒғҲҳЦцЧчШшЩщЪъЬьЭэЮюЯяİıŞşÇçÖöÜü'‘’` \-\.]+", name):
         await message.answer(
             "❌ F.I.O noto‘g‘ri formatda.\n"
             "❌ Неверный формат Ф.И.О."
@@ -205,7 +206,6 @@ async def get_phone(message: Message, state: FSMContext):
             )
             return
 
-    # Заранее сохраняем метаданные Телеграма из объекта message, чтобы не делать get_chat
     username = f"@{message.from_user.username}" if message.from_user.username else "Username yo‘q / Нет username"
     full_name = message.from_user.full_name
 
@@ -225,11 +225,11 @@ async def get_phone(message: Message, state: FSMContext):
     await state.set_state(Form.text)
 
 # =========================
-# SEND APPEAL
+# SEND APPEAL (BACKGROUND TASK)
 # =========================
 
-async def send_appeal(user_id, state):
-    # Ждем 5 секунд накопления буфера
+async def send_appeal(user_id, state: FSMContext):
+    # Ждем 5 секунд накопления буфера медиагруппы
     await asyncio.sleep(5)
 
     try:
@@ -241,18 +241,20 @@ async def send_appeal(user_id, state):
         if not texts and not photos:
             return
 
+        # Переводим пользователя в стейт отправки, чтобы он не слал новые сообщения в процессе
+        await state.set_state(Form.sending)
+
         if texts:
             full_text = "\n".join(texts)
         else:
             full_text = "📷 Murojaat faqat rasmdan iborat\n📷 Обращение состоит только из фото"
 
         appeals_data.append({
-            "mahalla": data['mahalla']
+            "mahalla": data.get('mahalla', 'Noma\'lum')
         })
 
         appeal_id = str(len(appeals_data)).zfill(5)
 
-        # Вытаскиваем сохраненные на этапе телефона юзер-данные
         username = data.get('tg_username')
         full_name = data.get('tg_fullname')
 
@@ -261,9 +263,9 @@ async def send_appeal(user_id, state):
 
 🆔 ID: #{appeal_id}
 
-👤 F.I.O: {data['fullname']}
-🏠 Mahalla: {data['mahalla']}
-📞 Telefon: {data['phone']}
+👤 F.I.O: {data.get('fullname')}
+🏠 Mahalla: {data.get('mahalla')}
+📞 Telefon: {data.get('phone')}
 
 👤 Telegram: {full_name}
 🔗 Username: {username}
@@ -276,16 +278,18 @@ async def send_appeal(user_id, state):
         # 1. Сначала отправляем текст в группу хокимията
         await bot.send_message(GROUP_ID, result)
 
-        # 2. Если есть фотки, упаковываем их в красивый единый альбом (Media Group)
+        # 2. Если есть фотки, упаковываем в альбом
         if photos:
             media_group = [InputMediaPhoto(media=photo_id) for photo_id in photos]
             try:
                 await bot.send_media_group(GROUP_ID, media=media_group)
             except Exception as e:
                 print("Ошибка отправки медиагруппы:", e)
-                # Фолбэк на поштучную отправку, если что-то пошло не так
                 for photo_id in photos:
-                    await bot.send_photo(GROUP_ID, photo_id)
+                    try:
+                        await bot.send_photo(GROUP_ID, photo_id)
+                    except Exception:
+                        pass
 
         # 3. Кнопка перезапуска для жителя
         restart_kb = ReplyKeyboardMarkup(
@@ -303,12 +307,15 @@ async def send_appeal(user_id, state):
             reply_markup=restart_kb
         )
 
-        # 4. Логирование в Google Таблицы
+        # 4. Сбрасываем стейт СРАЗУ ПОСЛЕ успешной отправки в Telegram, не дожидаясь Sheets API
+        await state.clear()
+
+        # 5. Логирование в Google Таблицы (в бэкграунде)
         payload = {
             "id": appeal_id,
-            "fullname": data['fullname'],
-            "mahalla": data['mahalla'],
-            "phone": data['phone'],
+            "fullname": data.get('fullname'),
+            "mahalla": data.get('mahalla'),
+            "phone": data.get('phone'),
             "text": full_text,
             "username": username,
             "telegram_id": user_id
@@ -316,20 +323,19 @@ async def send_appeal(user_id, state):
 
         async with aiohttp.ClientSession() as session:
             try:
-                async with session.post(SHEET_URL, json=payload, timeout=5) as response:
+                async with session.post(SHEET_URL, json=payload, timeout=8) as response:
                     if response.status != 200:
                         print(f"Sheets API Error: {response.status}")
             except Exception as e:
                 print("Google Sheets Error:", e)
 
-        # 5. Чистим стейты и буферы в самом конце
-        await state.clear()
+    except asyncio.CancelledError:
+        print(f"Task for user {user_id} was cancelled.")
+    finally:
+        # Блок finally выполнится ВСЕГДА, что защищает от зависания буферов
         message_buffers.pop(user_id, None)
         photo_buffers.pop(user_id, None)
         message_tasks.pop(user_id, None)
-
-    except asyncio.CancelledError:
-        pass
 
 # =========================
 # TEXT / PHOTO
@@ -366,14 +372,28 @@ async def get_text(message: Message, state: FSMContext):
         )
         return
 
+    # Если пользователь досылает медиа/текст в течение 5 секунд, продлеваем таймер
     old_task = message_tasks.get(user_id)
-    if old_task:
+    if old_task and not old_task.done():
         old_task.cancel()
 
     task = asyncio.create_task(send_appeal(user_id, state))
     active_tasks.add(task)
     task.add_done_callback(active_tasks.discard)
     message_tasks[user_id] = task
+
+# =========================
+# ANTI-SPAM ON SENDING
+# =========================
+
+@dp.message(Form.sending)
+async def processing_appeal(message: Message):
+    # Если данные уже отправляются, просим подождать пару секунд
+    if message.chat.type == "private":
+        await message.answer(
+            "⏳ Murojaatingiz yuborilmoqda, iltimos kuting...\n"
+            "⏳ Ваше обращение отправляется, пожалуйста, подождите..."
+        )
 
 # =========================
 # STATISTICS
@@ -420,17 +440,9 @@ async def unknown_message(message: Message):
         return
 
     await message.answer(
-        "ℹ️ Sizning murojaatingiz allaqachon yuborilgan.\n\n"
-        "➕ Yangi murojaat yuborish uchun:\n"
-        "- “➕ Yangi murojaat” tugmasini bosing\n"
-        "yoki\n"
-        "- /start buyrug‘ini yuboring.\n\n"
+        "ℹ️ Yangi murojaat yuborish uchun “➕ Yangi murojaat” tugmasini bosing yoki /start buyrug‘ini yuboring.\n\n"
         "————————————\n\n"
-        "ℹ️ Ваше обращение уже отправлено.\n\n"
-        "➕ Чтобы создать новое обращение:\n"
-        "- нажмите кнопку “➕ Yangi murojaat”\n"
-        "или\n"
-        "- отправьте команду /start"
+        "ℹ️ Чтобы создать новое обращение, нажмите кнопку “➕ Yangi murojaat” или отправьте команду /start"
     )
 
 # =========================
@@ -458,9 +470,17 @@ async def start_web_server():
 # =========================
 # MAIN
 # =========================
+@dp.message()
+async def get_group_id_debug(message: Message):
+    # Этот хэндлер сработает на любое сообщение в группе
+    print("\n====================================")
+    print(f"ID ЭТОГО ЧАТА: {message.chat.id}")
+    print(f"ТИП ЧАТА: {message.chat.type}")
+    print(f"ТЕКСТ: {message.text}")
+    print("====================================\n")
 
 async def main():
-    print("✅ Bot ishga tushdi...")
+    print("✅ Bot успешно запущен...")
     await start_web_server()
     await dp.start_polling(bot)
 
