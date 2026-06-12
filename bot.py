@@ -1,35 +1,34 @@
 # ============================================================
-# MUROJAAT BOT  —  Production v3.0 (HTML Safe & Stable)
+# MUROJAAT BOT  —  Production v3.0 (HTML Safe & Fixed)
 # ============================================================
 
+import asyncio
+import hashlib
+import json
+import logging
 import os
 import re
-import json
-import time
-import hashlib
-import asyncio
-import aiohttp
 import sqlite3
-import logging
-
-from datetime import datetime, timedelta, timezone
+import time
 from collections import defaultdict
-from dotenv import load_dotenv
-from aiohttp import web
+from datetime import datetime, timedelta, timezone
 
+import aiohttp
 from aiogram import Bot, Dispatcher
+from aiogram.filters import CommandStart
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
+    InputMediaPhoto,
+    KeyboardButton,
     Message,
     ReplyKeyboardMarkup,
-    KeyboardButton,
     ReplyKeyboardRemove,
-    InputMediaPhoto,
 )
-from aiogram.filters import CommandStart
-from aiogram.fsm.state import StatesGroup, State
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.utils.keyboard import ReplyKeyboardBuilder
+from aiohttp import web
+from dotenv import load_dotenv
 
 # ============================================================
 # LOGGING
@@ -45,32 +44,55 @@ logger = logging.getLogger(__name__)
 # ============================================================
 load_dotenv()
 
-TOKEN          = os.getenv("BOT_TOKEN")
-GROUP_ID       = int(os.getenv("GROUP_ID", "0"))
-SHEET_URL      = os.getenv("SHEET_URL", "")
+TOKEN = os.getenv("BOT_TOKEN")
+GROUP_ID = int(os.getenv("GROUP_ID", "0"))
+SHEET_URL = os.getenv("SHEET_URL", "")
 
-_raw_admins    = os.getenv("ADMIN_IDS", "")
+_raw_admins = os.getenv("ADMIN_IDS", "")
 ADMIN_IDS: set[int] = {int(x) for x in _raw_admins.split(",") if x.strip().isdigit()}
 
-_missing = [k for k, v in {
-    "BOT_TOKEN":  TOKEN,
-    "GROUP_ID":   GROUP_ID or None,
-    "SHEET_URL":  SHEET_URL or None,
-}.items() if not v]
+_missing = [
+    k
+    for k, v in {
+        "BOT_TOKEN": TOKEN,
+        "GROUP_ID": GROUP_ID or None,
+        "SHEET_URL": SHEET_URL or None,
+    }.items()
+    if not v
+]
 
 if _missing:
-    raise RuntimeError(f"Отсутствуют обязательные переменные окружения: {', '.join(_missing)}")
+    raise RuntimeError(
+        f"Отсутствуют обязательные переменные окружения: {', '.join(_missing)}"
+    )
+
+# ============================================================
+# IN-MEMORY BUFFERS & GLOBAL HELPERS (FIXED POSITION)
+# ============================================================
+message_buffers: dict[int, list[str]] = {}
+photo_buffers: dict[int, list[str]] = {}
+message_tasks: dict[int, asyncio.Task] = {}
+active_tasks: set[asyncio.Task] = set()
+
+
+def _text_hash(text: str, user_id: int) -> str:
+    """Генерирует уникальный хэш для защиты от дубликатов."""
+    raw = f"{user_id}:{text.strip().lower()}"
+    return hashlib.md5(raw.encode()).hexdigest()
+
 
 # ============================================================
 # LOCAL SQLITE DATABASE
 # ============================================================
 DB_PATH = "appeals.db"
 
+
 def db_connect() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     return conn
+
 
 def db_init() -> None:
     with db_connect() as conn:
@@ -97,9 +119,17 @@ def db_init() -> None:
         conn.commit()
     logger.info("✅ SQLite initialized (%s)", DB_PATH)
 
+
 def db_save_appeal(
-    fullname: str, mahalla: str, phone: str, text: str, text_hash: str,
-    username: str, telegram_id: int, has_attachments: bool, attachments_json: str,
+    fullname: str,
+    mahalla: str,
+    phone: str,
+    text: str,
+    text_hash: str,
+    username: str,
+    telegram_id: int,
+    has_attachments: bool,
+    attachments_json: str,
 ) -> int:
     with db_connect() as conn:
         cur = conn.execute(
@@ -108,13 +138,26 @@ def db_save_appeal(
             (fullname, mahalla, phone, text, text_hash, username, telegram_id, has_attachments, attachments_json)
             VALUES (?,?,?,?,?,?,?,?,?)
             """,
-            (fullname, mahalla, phone, text, text_hash, username, str(telegram_id), int(has_attachments), attachments_json),
+            (
+                fullname,
+                mahalla,
+                phone,
+                text,
+                text_hash,
+                username,
+                str(telegram_id),
+                int(has_attachments),
+                attachments_json,
+            ),
         )
         conn.commit()
         return cur.lastrowid
 
+
 def db_is_duplicate(telegram_id: int, text_hash: str) -> bool:
-    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=10)).strftime("%Y-%m-%d %H:%M:%S")
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=10)).strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
     with db_connect() as conn:
         row = conn.execute(
             "SELECT 1 FROM appeals WHERE telegram_id=? AND text_hash=? AND created_at>? LIMIT 1",
@@ -122,23 +165,20 @@ def db_is_duplicate(telegram_id: int, text_hash: str) -> bool:
         ).fetchone()
     return row is not None
 
+
 # ============================================================
-# BOT INITIALIZATION
+# BOT INITIALIZATION & ANTISPAM
 # ============================================================
 bot = Bot(token=TOKEN)
-dp  = Dispatcher(storage=MemoryStorage())
-
-message_buffers: dict[int, list[str]]    = {}
-photo_buffers:   dict[int, list[str]]    = {}
-message_tasks:   dict[int, asyncio.Task] = {}
-active_tasks:    set[asyncio.Task]       = set()
+dp = Dispatcher(storage=MemoryStorage())
 
 _last_submission: dict[int, float] = {}
 _submission_window: dict[int, list[float]] = defaultdict(list)
 
-COOLDOWN_SECONDS  = 15      
-WINDOW_SECONDS    = 300     
-WINDOW_MAX_COUNT  = 5       
+COOLDOWN_SECONDS = 15
+WINDOW_SECONDS = 300
+WINDOW_MAX_COUNT = 5
+
 
 def antispam_check(user_id: int) -> tuple[bool, str]:
     now = time.time()
@@ -156,10 +196,12 @@ def antispam_check(user_id: int) -> tuple[bool, str]:
 
     return True, ""
 
+
 def antispam_record(user_id: int) -> None:
     now = time.time()
     _last_submission[user_id] = now
     _submission_window[user_id].append(now)
+
 
 async def _send_to_sheets(payload: dict, retries: int = 3) -> None:
     if not SHEET_URL:
@@ -174,39 +216,70 @@ async def _send_to_sheets(payload: dict, retries: int = 3) -> None:
                 ) as resp:
                     if resp.status == 200:
                         return
-                    logger.warning("Sheets: статус %s (попытка %d/%d)", resp.status, attempt, retries)
+                    logger.warning(
+                        "Sheets: статус %s (попытка %d/%d)",
+                        resp.status,
+                        attempt,
+                        retries,
+                    )
         except Exception as exc:
             logger.warning("Sheets ошибка (попытка %d/%d): %s", attempt, retries, exc)
-        await asyncio.sleep(2 ** attempt)
+        await asyncio.sleep(2**attempt)
+
 
 # ============================================================
 # DATA LISTS & STATES
 # ============================================================
 MAHALLALAR = [
-    "Bekobod MFY", "Saidobod MFY", "Chimqo'rg'on MFY", "Murot Ali MFY",
-    "Fayzobod MFY", "Do'ngqo'rg'on MFY", "Mo'minobod MFY", "Birlik MFY",
-    "Yangiobod MFY", "Ko'lota MFY", "Guliston MFY", "Navoiy MFY",
-    "Lolaariq MFY", "Ming tepa MFY", "G'ayrat MFY", "Do'stlik MFY",
-    "Oqtepa MFY", "Mitan MFY", "Oybek MFY", "Kultepa MFY",
-    "Mustaqillik MFY", "Taraqqiyot MFY", "Oqtom MFY",
+    "Bekobod MFY",
+    "Saidobod MFY",
+    "Chimqo'rg'on MFY",
+    "Murot Ali MFY",
+    "Fayzobod MFY",
+    "Do'ngqo'rg'on MFY",
+    "Mo'minobod MFY",
+    "Birlik MFY",
+    "Yangiobod MFY",
+    "Ko'lota MFY",
+    "Guliston MFY",
+    "Navoiy MFY",
+    "Lolaariq MFY",
+    "Ming tepa MFY",
+    "G'ayrat MFY",
+    "Do'stlik MFY",
+    "Oqtepa MFY",
+    "Mitan MFY",
+    "Oybek MFY",
+    "Kultepa MFY",
+    "Mustaqillik MFY",
+    "Taraqqiyot MFY",
+    "Oqtom MFY",
 ]
 MAHALLALAR_SET = set(MAHALLALAR)
 
+
 class Form(StatesGroup):
     fullname = State()
-    mahalla  = State()
-    phone    = State()
-    text     = State()
+    mahalla = State()
+    phone = State()
+    text = State()
+
 
 def _clean_buffers(user_id: int) -> None:
     message_buffers.pop(user_id, None)
     photo_buffers.pop(user_id, None)
     message_tasks.pop(user_id, None)
 
+
 def _cancel_pending(user_id: int) -> None:
     task = message_tasks.get(user_id)
     if task and not task.done():
         task.cancel()
+
+
+def _is_admin(chat_id: int) -> bool:
+    return chat_id == GROUP_ID or chat_id in ADMIN_IDS
+
 
 # ============================================================
 # USER FLOW HANDLERS
@@ -214,7 +287,9 @@ def _cancel_pending(user_id: int) -> None:
 @dp.message(CommandStart())
 async def start(message: Message, state: FSMContext):
     if message.chat.type != "private":
-        await message.answer("❌ Bot faqat shaxsiy chatda ishlaydi.\n❌ Бот работает только в личных сообщениях.")
+        await message.answer(
+            "❌ Bot faqat shaxsiy chatda ishlaydi.\n❌ Бот работает только в личных сообщениях."
+        )
         return
 
     _cancel_pending(message.from_user.id)
@@ -236,11 +311,14 @@ async def start(message: Message, state: FSMContext):
     await message.answer("👤 F.I.O kiriting:\n👤 Введите Ф.И.О.")
     await state.set_state(Form.fullname)
 
+
 @dp.message(Form.fullname)
 async def get_name(message: Message, state: FSMContext):
     name = message.text.strip() if message.text else ""
     if not re.fullmatch(r"[A-Za-zА-Яа-яЁёЎўҚқҒғҲҳİıŞşÇçÖöÜü'''\- ]+", name):
-        await message.answer("❌ F.I.O noto'g'ri formatda. Faqat harflar.\n❌ Неверный формат Ф.И.О. Только буквы.")
+        await message.answer(
+            "❌ F.I.O noto'g'ri formatda. Faqat harflar.\n❌ Неверный формат Ф.И.О. Только буквы."
+        )
         return
 
     await state.update_data(fullname=name)
@@ -255,24 +333,37 @@ async def get_name(message: Message, state: FSMContext):
     )
     await state.set_state(Form.mahalla)
 
+
 @dp.message(Form.mahalla)
 async def get_mahalla(message: Message, state: FSMContext):
     mahalla = message.text.strip() if message.text else ""
     if mahalla not in MAHALLALAR_SET:
-        await message.answer("❌ Mahalla topilmadi. Tugmadan tanlang.\n❌ Махалля не найдена. Выберите из кнопок.")
+        await message.answer(
+            "❌ Mahalla topilmadi. Tugmadan tanlang.\n❌ Махалля не найдена. Выберите из кнопок."
+        )
         return
 
     await state.update_data(mahalla=mahalla)
-    await message.answer("✅ Mahalla tanlandi!\n✅ Махалля выбрана!", reply_markup=ReplyKeyboardRemove())
+    await message.answer(
+        "✅ Mahalla tanlandi!\n✅ Махалля выбрана!", reply_markup=ReplyKeyboardRemove()
+    )
     await message.answer(
         "📞 Telefon raqam yuboring yoki yozing:\n"
         "📞 Отправьте или напишите номер телефона:",
         reply_markup=ReplyKeyboardMarkup(
-            keyboard=[[KeyboardButton(text="📞 Raqam yuborish / Отправить номер", request_contact=True)]],
-            resize_keyboard=True, one_time_keyboard=True,
+            keyboard=[
+                [
+                    KeyboardButton(
+                        text="📞 Raqam yuborish / Отправить номер", request_contact=True
+                    )
+                ]
+            ],
+            resize_keyboard=True,
+            one_time_keyboard=True,
         ),
     )
     await state.set_state(Form.phone)
+
 
 @dp.message(Form.phone)
 async def get_phone(message: Message, state: FSMContext):
@@ -281,12 +372,16 @@ async def get_phone(message: Message, state: FSMContext):
     else:
         phone = message.text.strip() if message.text else ""
         if len("".join(filter(str.isdigit, phone))) < 7:
-            await message.answer("❌ Telefon raqam noto'g'ri.\n❌ Неверный номер телефона.")
+            await message.answer(
+                "❌ Telefon raqam noto'g'ri.\n❌ Неверный номер телефона."
+            )
             return
 
     await state.update_data(
         phone=phone,
-        tg_username=f"@{message.from_user.username}" if message.from_user.username else "Нет username",
+        tg_username=f"@{message.from_user.username}"
+        if message.from_user.username
+        else "Нет username",
         tg_fullname=message.from_user.full_name,
     )
     await message.answer(
@@ -298,45 +393,89 @@ async def get_phone(message: Message, state: FSMContext):
     )
     await state.set_state(Form.text)
 
+
 # ============================================================
 # CORE PIPELINE: SEND APPEAL (HTML SAFE)
 # ============================================================
 async def send_appeal(user_id: int, state: FSMContext) -> None:
-    await asyncio.sleep(5)   
+    await asyncio.sleep(5)
     try:
-        data   = await state.get_data()
-        texts  = message_buffers.get(user_id, [])
+        data = await state.get_data()
+        texts = message_buffers.get(user_id, [])
         photos = photo_buffers.get(user_id, [])
 
         if not texts and not photos:
             return
 
-        full_text = "\n".join(texts) if texts else "📷 Murojaat faqat rasmdan iborat / Обращение только из фото"
+        full_text = (
+            "\n".join(texts)
+            if texts
+            else "📷 Murojaat faqat rasmdan iborat / Обращение только из фото"
+        )
 
         allowed, reason = antispam_check(user_id)
         if not allowed:
             if reason.startswith("cooldown"):
                 sec = reason.split(":")[1]
-                await bot.send_message(user_id, f"⏳ Iltimos, {sec} soniya kuting.\n⏳ Пожалуйста, подождите {sec} секунд.")
+                await bot.send_message(
+                    user_id,
+                    f"⏳ Iltimos, {sec} soniya kuting.\n⏳ Пожалуйста, подождите {sec} секунд.",
+                )
             return
 
         t_hash = _text_hash(full_text, user_id)
         if db_is_duplicate(user_id, t_hash):
-            await bot.send_message(user_id, "ℹ️ Bu murojaat allaqachon yuborilgan.\nℹ️ Такое обращение уже отправлено.")
+            await bot.send_message(
+                user_id,
+                "ℹ️ Bu murojaat allaqachon yuborilgan.\nℹ️ Такое обращение уже отправлено.",
+            )
             return
 
         username = data.get("tg_username", "—")
-        tg_name  = data.get("tg_fullname", "—")
-        appeal_id = str(db_save_appeal(data["fullname"], data["mahalla"], data["phone"], full_text, t_hash, username, user_id, bool(photos), json.dumps(photos))).zfill(5)
+        tg_name = data.get("tg_fullname", "—")
+        appeal_id = str(
+            db_save_appeal(
+                data["fullname"],
+                data["mahalla"],
+                data["phone"],
+                full_text,
+                t_hash,
+                username,
+                user_id,
+                bool(photos),
+                json.dumps(photos),
+            )
+        ).zfill(5)
         antispam_record(user_id)
 
         # Экранирование HTML сущностей для 100% стабильности разметки
-        safe_fullname = data["fullname"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        safe_mahalla  = data["mahalla"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        safe_phone    = data["phone"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        safe_tg_name  = tg_name.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        safe_username = username.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        safe_text     = full_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        safe_fullname = (
+            data["fullname"]
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+        )
+        safe_mahalla = (
+            data["mahalla"]
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+        )
+        safe_phone = (
+            data["phone"]
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+        )
+        safe_tg_name = (
+            tg_name.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        )
+        safe_username = (
+            username.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        )
+        safe_text = (
+            full_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        )
 
         group_msg = (
             f"📨 <b>Yangi murojaat / Новое обращение</b>\n\n"
@@ -353,25 +492,41 @@ async def send_appeal(user_id: int, state: FSMContext) -> None:
 
         if photos:
             try:
-                await bot.send_media_group(GROUP_ID, media=[InputMediaPhoto(media=fid) for fid in photos])
+                await bot.send_media_group(
+                    GROUP_ID, media=[InputMediaPhoto(media=fid) for fid in photos]
+                )
             except Exception:
                 for fid in photos:
                     await bot.send_photo(GROUP_ID, fid)
 
         await bot.send_message(
-            user_id, f"✅ Murojaatingiz qabul qilindi.\n🆔 ID: #{appeal_id}\n📨 Murojaat mas'ul xodimlarga yuborildi.",
-            reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="➕ Yangi murojaat")]], resize_keyboard=True),
+            user_id,
+            f"✅ Murojaatingiz qabul qilindi.\n🆔 ID: #{appeal_id}\n📨 Murojaat mas'ul xodimlarga yuborildi.",
+            reply_markup=ReplyKeyboardMarkup(
+                keyboard=[[KeyboardButton(text="➕ Yangi murojaat")]],
+                resize_keyboard=True,
+            ),
         )
 
-        asyncio.create_task(_send_to_sheets({
-            "id": appeal_id, "fullname": data["fullname"], "mahalla": data["mahalla"],
-            "phone": data["phone"], "text": full_text, "username": username, "telegram_id": user_id,
-        }))
+        asyncio.create_task(
+            _send_to_sheets(
+                {
+                    "id": appeal_id,
+                    "fullname": data["fullname"],
+                    "mahalla": data["mahalla"],
+                    "phone": data["phone"],
+                    "text": full_text,
+                    "username": username,
+                    "telegram_id": user_id,
+                }
+            )
+        )
     except Exception as exc:
         logger.exception("Ошибка send_appeal: %s", exc)
     finally:
         await state.clear()
         _clean_buffers(user_id)
+
 
 @dp.message(Form.text)
 async def get_text(message: Message, state: FSMContext):
@@ -380,12 +535,20 @@ async def get_text(message: Message, state: FSMContext):
     photo_buffers.setdefault(user_id, [])
 
     valid = False
-    if message.text: message_buffers[user_id].append(message.text); valid = True
-    if message.caption: message_buffers[user_id].append(message.caption); valid = True
-    if message.photo: photo_buffers[user_id].append(message.photo[-1].file_id); valid = True
+    if message.text:
+        message_buffers[user_id].append(message.text)
+        valid = True
+    if message.caption:
+        message_buffers[user_id].append(message.caption)
+        valid = True
+    if message.photo:
+        photo_buffers[user_id].append(message.photo[-1].file_id)
+        valid = True
 
     if not valid:
-        await message.answer("❌ Faqat matn yoki rasm yuboring.\n❌ Отправьте только текст или фото.")
+        await message.answer(
+            "❌ Faqat matn yoki rasm yuboring.\n❌ Отправьте только текст или фото."
+        )
         return
 
     _cancel_pending(user_id)
@@ -394,24 +557,28 @@ async def get_text(message: Message, state: FSMContext):
     task.add_done_callback(active_tasks.discard)
     message_tasks[user_id] = task
 
+
 # ============================================================
 # ADMIN / GROUP DECORATOR & COMMANDS
 # ============================================================
 def _admin_only(handler):
     async def wrapper(message: Message, **kwargs):
-        # Доступ разрешен внутри группы хокимията ИЛИ админам из списка лички
         if message.chat.id == GROUP_ID or message.from_user.id in ADMIN_IDS:
             await handler(message, **kwargs)
             return
         return
+
     return wrapper
+
 
 @dp.message(lambda m: m.text == "/stat")
 @_admin_only
 async def cmd_stat(message: Message, **kwargs):
     google_script_url = os.getenv("SHEET_URL")
     if not google_script_url:
-        await message.answer("❌ Система настроена неверно: отсутствует ссылка на таблицу.")
+        await message.answer(
+            "❌ Система настроена неверно: отсутствует ссылка на таблицу."
+        )
         return
 
     await message.answer("🔄 Statistika yuklanmoqda... / Статистика загружается...")
@@ -423,7 +590,7 @@ async def cmd_stat(message: Message, **kwargs):
                     total = data.get("total", 0)
                     month = data.get("month", 0)
                     today = data.get("today", 0)
-                    
+
                     text = (
                         "📊 <b>Murojaatlar Statistikasi / Статистика обращений</b>\n\n"
                         f"📝 <b>Jami / Всего:</b> {total}\n"
@@ -432,10 +599,15 @@ async def cmd_stat(message: Message, **kwargs):
                     )
                     await message.answer(text, parse_mode="HTML")
                 else:
-                    await message.answer("❌ Ma'lumotlarni olib bo'lmadi. / Не удалось получить данные.")
+                    await message.answer(
+                        "❌ Ma'lumotlarni olib bo'lmadi. / Не удалось получить данные."
+                    )
     except Exception as e:
         logger.error("Ошибка команды /stat: %s", e)
-        await message.answer("❌ Tizimda xatolik yuz berdi. / Произошла ошибка в системе.")
+        await message.answer(
+            "❌ Tizimда xatolik yuz berdi. / Произошла ошибка в системе."
+        )
+
 
 @dp.message(lambda m: m.text == "➕ Yangi murojaat")
 async def restart_form(message: Message, state: FSMContext):
@@ -443,12 +615,16 @@ async def restart_form(message: Message, state: FSMContext):
     _cancel_pending(user_id)
     _clean_buffers(user_id)
     await state.clear()
-    await message.answer("👤 F.I.O kiriting:\n👤 Введите Ф.И.О.", reply_markup=ReplyKeyboardRemove())
+    await message.answer(
+        "👤 F.I.O kiriting:\n👤 Введите Ф.И.О.", reply_markup=ReplyKeyboardRemove()
+    )
     await state.set_state(Form.fullname)
+
 
 @dp.message()
 async def unknown_message(message: Message):
-    if message.chat.type != "private": return
+    if message.chat.type != "private":
+        return
     await message.answer(
         "ℹ️ Sizning murojaatingiz allaqachon yuborilgan.\n\n"
         "➕ Yangi murojaat uchun:\n"
@@ -456,11 +632,13 @@ async def unknown_message(message: Message):
         "yoki /start yuboring."
     )
 
+
 # ============================================================
 # WEB SERVER & APPLICATION ENTRYPOINT
 # ============================================================
-async def health_check(request): 
+async def health_check(request):
     return web.Response(text="OK")
+
 
 async def start_web_server() -> None:
     app = web.Application()
@@ -470,10 +648,12 @@ async def start_web_server() -> None:
     port = int(os.environ.get("PORT", 10000))
     await web.TCPSite(runner, "0.0.0.0", port).start()
 
+
 async def main() -> None:
     db_init()
     await start_web_server()
     await dp.start_polling(bot)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
