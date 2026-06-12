@@ -1,18 +1,5 @@
 # ============================================================
-# MUROJAAT BOT  —  Production v3.0 (Clean Version)
-# ============================================================
-# Features:
-#   • FSM: fullname → mahalla → phone → text/photo
-#   • Rate limit / antispam (cooldown + 5-per-5min window)
-#   • Message deduplication (hash-based)
-#   • SQLite with extensible schema
-#   • Admin-only command: /stat (connected to Google Sheets)
-#   • Google Sheets sync with exponential retry (non-blocking)
-#   • Structured logging
-# ============================================================
-
-# ============================================================
-# IMPORTS
+# MUROJAAT BOT  —  Production v3.0 (HTML Safe & Stable)
 # ============================================================
 
 import os
@@ -38,7 +25,7 @@ from aiogram.types import (
     ReplyKeyboardRemove,
     InputMediaPhoto,
 )
-from aiogram.filters import CommandStart, Command
+from aiogram.filters import CommandStart
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -47,7 +34,6 @@ from aiogram.utils.keyboard import ReplyKeyboardBuilder
 # ============================================================
 # LOGGING
 # ============================================================
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -55,16 +41,14 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ============================================================
-# ENV & VALIDATION
+# CONFIGURATION & VARIABLES
 # ============================================================
-
 load_dotenv()
 
 TOKEN          = os.getenv("BOT_TOKEN")
 GROUP_ID       = int(os.getenv("GROUP_ID", "0"))
 SHEET_URL      = os.getenv("SHEET_URL", "")
 
-# Список Telegram ID администраторов (кроме GROUP_ID).
 _raw_admins    = os.getenv("ADMIN_IDS", "")
 ADMIN_IDS: set[int] = {int(x) for x in _raw_admins.split(",") if x.strip().isdigit()}
 
@@ -78,18 +62,15 @@ if _missing:
     raise RuntimeError(f"Отсутствуют обязательные переменные окружения: {', '.join(_missing)}")
 
 # ============================================================
-# DATABASE
+# LOCAL SQLITE DATABASE
 # ============================================================
-
 DB_PATH = "appeals.db"
-
 
 def db_connect() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     return conn
-
 
 def db_init() -> None:
     with db_connect() as conn:
@@ -116,7 +97,6 @@ def db_init() -> None:
         conn.commit()
     logger.info("✅ SQLite initialized (%s)", DB_PATH)
 
-
 def db_save_appeal(
     fullname: str, mahalla: str, phone: str, text: str, text_hash: str,
     username: str, telegram_id: int, has_attachments: bool, attachments_json: str,
@@ -133,7 +113,6 @@ def db_save_appeal(
         conn.commit()
         return cur.lastrowid
 
-
 def db_is_duplicate(telegram_id: int, text_hash: str) -> bool:
     cutoff = (datetime.now(timezone.utc) - timedelta(minutes=10)).strftime("%Y-%m-%d %H:%M:%S")
     with db_connect() as conn:
@@ -143,26 +122,16 @@ def db_is_duplicate(telegram_id: int, text_hash: str) -> bool:
         ).fetchone()
     return row is not None
 
-
 # ============================================================
-# BOT & DISPATCHER
+# BOT INITIALIZATION
 # ============================================================
-
 bot = Bot(token=TOKEN)
 dp  = Dispatcher(storage=MemoryStorage())
-
-# ============================================================
-# IN-MEMORY BUFFERS
-# ============================================================
 
 message_buffers: dict[int, list[str]]    = {}
 photo_buffers:   dict[int, list[str]]    = {}
 message_tasks:   dict[int, asyncio.Task] = {}
 active_tasks:    set[asyncio.Task]       = set()
-
-# ============================================================
-# RATE LIMIT / ANTISPAM
-# ============================================================
 
 _last_submission: dict[int, float] = {}
 _submission_window: dict[int, list[float]] = defaultdict(list)
@@ -170,7 +139,6 @@ _submission_window: dict[int, list[float]] = defaultdict(list)
 COOLDOWN_SECONDS  = 15      
 WINDOW_SECONDS    = 300     
 WINDOW_MAX_COUNT  = 5       
-
 
 def antispam_check(user_id: int) -> tuple[bool, str]:
     now = time.time()
@@ -188,16 +156,10 @@ def antispam_check(user_id: int) -> tuple[bool, str]:
 
     return True, ""
 
-
 def antispam_record(user_id: int) -> None:
     now = time.time()
     _last_submission[user_id] = now
     _submission_window[user_id].append(now)
-
-
-# ============================================================
-# GOOGLE SHEETS INTERACTION
-# ============================================================
 
 async def _send_to_sheets(payload: dict, retries: int = 3) -> None:
     if not SHEET_URL:
@@ -217,11 +179,9 @@ async def _send_to_sheets(payload: dict, retries: int = 3) -> None:
             logger.warning("Sheets ошибка (попытка %d/%d): %s", attempt, retries, exc)
         await asyncio.sleep(2 ** attempt)
 
-
 # ============================================================
-# MAHALLA LIST
+# DATA LISTS & STATES
 # ============================================================
-
 MAHALLALAR = [
     "Bekobod MFY", "Saidobod MFY", "Chimqo'rg'on MFY", "Murot Ali MFY",
     "Fayzobod MFY", "Do'ngqo'rg'on MFY", "Mo'minobod MFY", "Birlik MFY",
@@ -232,52 +192,29 @@ MAHALLALAR = [
 ]
 MAHALLALAR_SET = set(MAHALLALAR)
 
-# ============================================================
-# FSM STATES
-# ============================================================
-
 class Form(StatesGroup):
     fullname = State()
     mahalla  = State()
     phone    = State()
     text     = State()
 
-# ============================================================
-# HELPERS
-# ============================================================
-
 def _clean_buffers(user_id: int) -> None:
     message_buffers.pop(user_id, None)
     photo_buffers.pop(user_id, None)
     message_tasks.pop(user_id, None)
-
 
 def _cancel_pending(user_id: int) -> None:
     task = message_tasks.get(user_id)
     if task and not task.done():
         task.cancel()
 
-
-def _is_admin(chat_id: int) -> bool:
-    return chat_id == GROUP_ID or chat_id in ADMIN_IDS
-
-
-def _text_hash(text: str, user_id: int) -> str:
-    raw = f"{user_id}:{text.strip().lower()}"
-    return hashlib.md5(raw.encode()).hexdigest()
-
-
 # ============================================================
-# /start
+# USER FLOW HANDLERS
 # ============================================================
-
 @dp.message(CommandStart())
 async def start(message: Message, state: FSMContext):
     if message.chat.type != "private":
-        await message.answer(
-            "❌ Bot faqat shaxsiy chatda ishlaydi.\n"
-            "❌ Бот работает только в личных сообщениях."
-        )
+        await message.answer("❌ Bot faqat shaxsiy chatda ishlaydi.\n❌ Бот работает только в личных сообщениях.")
         return
 
     _cancel_pending(message.from_user.id)
@@ -299,23 +236,14 @@ async def start(message: Message, state: FSMContext):
     await message.answer("👤 F.I.O kiriting:\n👤 Введите Ф.И.О.")
     await state.set_state(Form.fullname)
 
-# ============================================================
-# FULLNAME
-# ============================================================
-
 @dp.message(Form.fullname)
 async def get_name(message: Message, state: FSMContext):
     name = message.text.strip() if message.text else ""
-
     if not re.fullmatch(r"[A-Za-zА-Яа-яЁёЎўҚқҒғҲҳİıŞşÇçÖöÜü'''\- ]+", name):
-        await message.answer(
-            "❌ F.I.O noto'g'ri formatda. Faqat harflar.\n"
-            "❌ Неверный формат Ф.И.О. Только буквы."
-        )
+        await message.answer("❌ F.I.O noto'g'ri formatda. Faqat harflar.\n❌ Неверный формат Ф.И.О. Только буквы.")
         return
 
     await state.update_data(fullname=name)
-
     builder = ReplyKeyboardBuilder()
     for m in MAHALLALAR:
         builder.add(KeyboardButton(text=m))
@@ -327,44 +255,24 @@ async def get_name(message: Message, state: FSMContext):
     )
     await state.set_state(Form.mahalla)
 
-# ============================================================
-# MAHALLA
-# ============================================================
-
 @dp.message(Form.mahalla)
 async def get_mahalla(message: Message, state: FSMContext):
     mahalla = message.text.strip() if message.text else ""
-
     if mahalla not in MAHALLALAR_SET:
-        await message.answer(
-            "❌ Mahalla topilmadi. Tugmadan tanlang.\n"
-            "❌ Махалля не найдена. Выберите из кнопок."
-        )
+        await message.answer("❌ Mahalla topilmadi. Tugmadan tanlang.\n❌ Махалля не найдена. Выберите из кнопок.")
         return
 
     await state.update_data(mahalla=mahalla)
-
-    await message.answer(
-        "✅ Mahalla tanlandi!\n✅ Махалля выбрана!",
-        reply_markup=ReplyKeyboardRemove(),
-    )
+    await message.answer("✅ Mahalla tanlandi!\n✅ Махалля выбрана!", reply_markup=ReplyKeyboardRemove())
     await message.answer(
         "📞 Telefon raqam yuboring yoki yozing:\n"
         "📞 Отправьте или напишите номер телефона:",
         reply_markup=ReplyKeyboardMarkup(
-            keyboard=[[KeyboardButton(
-                text="📞 Raqam yuborish / Отправить номер",
-                request_contact=True,
-            )]],
-            resize_keyboard=True,
-            one_time_keyboard=True,
+            keyboard=[[KeyboardButton(text="📞 Raqam yuborish / Отправить номер", request_contact=True)]],
+            resize_keyboard=True, one_time_keyboard=True,
         ),
     )
     await state.set_state(Form.phone)
-
-# ============================================================
-# PHONE
-# ============================================================
 
 @dp.message(Form.phone)
 async def get_phone(message: Message, state: FSMContext):
@@ -373,10 +281,7 @@ async def get_phone(message: Message, state: FSMContext):
     else:
         phone = message.text.strip() if message.text else ""
         if len("".join(filter(str.isdigit, phone))) < 7:
-            await message.answer(
-                "❌ Telefon raqam noto'g'ri.\n"
-                "❌ Неверный номер телефона."
-            )
+            await message.answer("❌ Telefon raqam noto'g'ri.\n❌ Неверный номер телефона.")
             return
 
     await state.update_data(
@@ -384,7 +289,6 @@ async def get_phone(message: Message, state: FSMContext):
         tg_username=f"@{message.from_user.username}" if message.from_user.username else "Нет username",
         tg_fullname=message.from_user.full_name,
     )
-
     await message.answer(
         "📝 Murojaatingizni yozing.\n"
         "📷 Rasm yuborishingiz ham mumkin.\n\n"
@@ -395,12 +299,10 @@ async def get_phone(message: Message, state: FSMContext):
     await state.set_state(Form.text)
 
 # ============================================================
-# SEND APPEAL  (Чистая отправка в группу хокимията)
+# CORE PIPELINE: SEND APPEAL (HTML SAFE)
 # ============================================================
-
 async def send_appeal(user_id: int, state: FSMContext) -> None:
-    await asyncio.sleep(5)   # Сборщик буфера сообщений
-
+    await asyncio.sleep(5)   
     try:
         data   = await state.get_data()
         texts  = message_buffers.get(user_id, [])
@@ -409,71 +311,46 @@ async def send_appeal(user_id: int, state: FSMContext) -> None:
         if not texts and not photos:
             return
 
-        full_text = (
-            "\n".join(texts) if texts
-            else "📷 Murojaat faqat rasmdan iborat / Обращение только из фото"
-        )
+        full_text = "\n".join(texts) if texts else "📷 Murojaat faqat rasmdan iborat / Обращение только из фото"
 
-        # --- Antispam ---
         allowed, reason = antispam_check(user_id)
         if not allowed:
             if reason.startswith("cooldown"):
                 sec = reason.split(":")[1]
-                await bot.send_message(
-                    user_id,
-                    f"⏳ Iltimos, {sec} soniya kuting.\n"
-                    f"⏳ Пожалуйста, подождите {sec} секунд перед следующим обращением.",
-                )
-            else:
-                await bot.send_message(
-                    user_id,
-                    "🚫 Siz juda ko'p murojaat yubordingiz (5 ta / 5 daqiqa).\n"
-                    "🚫 Вы превысили лимит обращений (5 за 5 минут). Попробуйте позже.",
-                )
+                await bot.send_message(user_id, f"⏳ Iltimos, {sec} soniya kuting.\n⏳ Пожалуйста, подождите {sec} секунд.")
             return
 
-        # --- Дедупликация ---
         t_hash = _text_hash(full_text, user_id)
         if db_is_duplicate(user_id, t_hash):
-            await bot.send_message(
-                user_id,
-                "ℹ️ Bu murojaat allaqachon yuborilgan.\n"
-                "ℹ️ Такое обращение уже было отправлено недавно.",
-            )
+            await bot.send_message(user_id, "ℹ️ Bu murojaat allaqachon yuborilgan.\nℹ️ Такое обращение уже отправлено.")
             return
 
         username = data.get("tg_username", "—")
         tg_name  = data.get("tg_fullname", "—")
-
-        has_attachments  = bool(photos)
-        attachments_json = json.dumps(photos) if photos else "[]"
-
-        # --- Сохранение в локальный SQLite ---
-        row_id = db_save_appeal(
-            fullname=data["fullname"], mahalla=data["mahalla"],
-            phone=data["phone"],      text=full_text, text_hash=t_hash,
-            username=username,        telegram_id=user_id,
-            has_attachments=has_attachments, attachments_json=attachments_json
-        )
-        appeal_id = str(row_id).zfill(5)
-
+        appeal_id = str(db_save_appeal(data["fullname"], data["mahalla"], data["phone"], full_text, t_hash, username, user_id, bool(photos), json.dumps(photos))).zfill(5)
         antispam_record(user_id)
 
-        # --- Идеальный Двуязычный Шаблон для Группы Хокимията ---
-        group_msg = (
-            f"📨 **Yangi murojaat / Новое обращение**\n\n"
-            f"🆔 **ID:** #{appeal_id}\n\n"
-            f"👤 **F.I.O:** {data['fullname']}\n"
-            f"🏠 **Mahalla:** {data['mahalla']}\n"
-            f"📞 **Telefon:** {data['phone']}\n\n"
-            f"👤 **Telegram:** {tg_name}\n"
-            f"🔗 **Username:** {username}\n"
-            f"🆔 **Telegram ID:** {user_id}\n\n"
-            f"📝 **Murojaat / Обращение:**\n{full_text}"
-        )
-        await bot.send_message(GROUP_ID, group_msg, parse_mode="Markdown")
+        # Экранирование HTML сущностей для 100% стабильности разметки
+        safe_fullname = data["fullname"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        safe_mahalla  = data["mahalla"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        safe_phone    = data["phone"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        safe_tg_name  = tg_name.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        safe_username = username.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        safe_text     = full_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-        # --- Отправка Медиафайлов ---
+        group_msg = (
+            f"📨 <b>Yangi murojaat / Новое обращение</b>\n\n"
+            f"🆔 <b>ID:</b> #{appeal_id}\n\n"
+            f"👤 <b>F.I.O:</b> {safe_fullname}\n"
+            f"🏠 <b>Mahalla:</b> {safe_mahalla}\n"
+            f"📞 <b>Telefon:</b> {safe_phone}\n\n"
+            f"👤 <b>Telegram:</b> {safe_tg_name}\n"
+            f"🔗 <b>Username:</b> {safe_username}\n"
+            f"🆔 <b>Telegram ID:</b> {user_id}\n\n"
+            f"📝 <b>Murojaat / Обращение:</b>\n{safe_text}"
+        )
+        await bot.send_message(GROUP_ID, group_msg, parse_mode="HTML")
+
         if photos:
             try:
                 await bot.send_media_group(GROUP_ID, media=[InputMediaPhoto(media=fid) for fid in photos])
@@ -481,42 +358,20 @@ async def send_appeal(user_id: int, state: FSMContext) -> None:
                 for fid in photos:
                     await bot.send_photo(GROUP_ID, fid)
 
-         # --- Подтверждение заявителю ---
-        try:
-            await bot.send_message(
-                user_id,
-                f"✅ Murojaatingiz qabul qilindi.\n\n"
-                f"🆔 ID: #{appeal_id}\n\n"
-                f"📨 Murojaat mas'ul xodimlarga yuborildi.\n\n"
-                f"➕ Yangi murojaat yuborish uchun tugmani bosing.",
-                reply_markup=ReplyKeyboardMarkup(
-                    keyboard=[[KeyboardButton(text="➕ Yangi murojaat")]],
-                    resize_keyboard=True,
-                ),
-            )
-        except Exception as confirm_exc:
-            logger.error("Ошибка отправки подтверждения: %s", confirm_exc)
+        await bot.send_message(
+            user_id, f"✅ Murojaatingiz qabul qilindi.\n🆔 ID: #{appeal_id}\n📨 Murojaat mas'ul xodimlarga yuborildi.",
+            reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="➕ Yangi murojaat")]], resize_keyboard=True),
+        )
 
-        # --- Синхронизация с Google Sheets (Фоновый режим) ---
         asyncio.create_task(_send_to_sheets({
-            "id": appeal_id, "fullname": data["fullname"],
-            "mahalla": data["mahalla"], "phone": data["phone"],
-            "text": full_text, "username": username, "telegram_id": user_id,
+            "id": appeal_id, "fullname": data["fullname"], "mahalla": data["mahalla"],
+            "phone": data["phone"], "text": full_text, "username": username, "telegram_id": user_id,
         }))
-
     except Exception as exc:
         logger.exception("Ошибка send_appeal: %s", exc)
-        try:
-            await bot.send_message(user_id, "⚠️ Xatolik yuz berdi. /start ni bosing.\n⚠️ Произошла ошибка. Нажмите /start")
-        except Exception:
-            pass
     finally:
         await state.clear()
         _clean_buffers(user_id)
-
-# ============================================================
-# TEXT / PHOTO HANDLER
-# ============================================================
 
 @dp.message(Form.text)
 async def get_text(message: Message, state: FSMContext):
@@ -525,15 +380,9 @@ async def get_text(message: Message, state: FSMContext):
     photo_buffers.setdefault(user_id, [])
 
     valid = False
-    if message.text:
-        message_buffers[user_id].append(message.text)
-        valid = True
-    if message.caption:
-        message_buffers[user_id].append(message.caption)
-        valid = True
-    if message.photo:
-        photo_buffers[user_id].append(message.photo[-1].file_id)
-        valid = True
+    if message.text: message_buffers[user_id].append(message.text); valid = True
+    if message.caption: message_buffers[user_id].append(message.caption); valid = True
+    if message.photo: photo_buffers[user_id].append(message.photo[-1].file_id); valid = True
 
     if not valid:
         await message.answer("❌ Faqat matn yoki rasm yuboring.\n❌ Отправьте только текст или фото.")
@@ -546,42 +395,31 @@ async def get_text(message: Message, state: FSMContext):
     message_tasks[user_id] = task
 
 # ============================================================
-# ADMIN COMMANDS
+# ADMIN / GROUP DECORATOR & COMMANDS
 # ============================================================
-
 def _admin_only(handler):
-    """Декоратор: разрешает вызов только внутри рабочей группы хокимията или админам в личке."""
     async def wrapper(message: Message, **kwargs):
-        # Если команда написана в группе хокимията или её пишет админ из списка ADMIN_IDS
+        # Доступ разрешен внутри группы хокимията ИЛИ админам из списка лички
         if message.chat.id == GROUP_ID or message.from_user.id in ADMIN_IDS:
             await handler(message, **kwargs)
             return
-        # Во всех остальных случаях (чужие люди в боте) — игнорируем
         return
     return wrapper
-
 
 @dp.message(lambda m: m.text == "/stat")
 @_admin_only
 async def cmd_stat(message: Message, **kwargs):
     google_script_url = os.getenv("SHEET_URL")
-    
     if not google_script_url:
         await message.answer("❌ Система настроена неверно: отсутствует ссылка на таблицу.")
         return
 
     await message.answer("🔄 Statistika yuklanmoqda... / Статистика загружается...")
-    
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(google_script_url) as response:
                 if response.status == 200:
                     data = await response.json()
-                    
-                    if "error" in data:
-                        await message.answer(f"❌ Ошибка таблицы: {data['error']}")
-                        return
-                    
                     total = data.get("total", 0)
                     month = data.get("month", 0)
                     today = data.get("today", 0)
@@ -592,16 +430,12 @@ async def cmd_stat(message: Message, **kwargs):
                         f"📅 <b>Shu oyda / В этом месяце:</b> {month}\n"
                         f"📌 <b>Bugun / Сегодня:</b> {today}"
                     )
-                    
                     await message.answer(text, parse_mode="HTML")
                 else:
                     await message.answer("❌ Ma'lumotlarni olib bo'lmadi. / Не удалось получить данные.")
     except Exception as e:
-        print(f"Ошибка статистики: {e}")
+        logger.error("Ошибка команды /stat: %s", e)
         await message.answer("❌ Tizimda xatolik yuz berdi. / Произошла ошибка в системе.")
-# ============================================================
-# RESTART FORM
-# ============================================================
 
 @dp.message(lambda m: m.text == "➕ Yangi murojaat")
 async def restart_form(message: Message, state: FSMContext):
@@ -612,36 +446,21 @@ async def restart_form(message: Message, state: FSMContext):
     await message.answer("👤 F.I.O kiriting:\n👤 Введите Ф.И.О.", reply_markup=ReplyKeyboardRemove())
     await state.set_state(Form.fullname)
 
-# ============================================================
-# UNKNOWN MESSAGE
-# ============================================================
-
 @dp.message()
 async def unknown_message(message: Message):
-    if message.chat.type != "private":
-        return
+    if message.chat.type != "private": return
     await message.answer(
         "ℹ️ Sizning murojaatingiz allaqachon yuborilgan.\n\n"
         "➕ Yangi murojaat uchun:\n"
         "— «➕ Yangi murojaat» tugmasini bosing\n"
-        "yoki /start yuboring.\n\n"
-        "————————————\n\n"
-        "ℹ️ Ваше обращение уже отправлено.\n\n"
-        "➕ Для нового обращения:\n"
-        "— нажмите «➕ Yangi murojaat»\n"
-        "или отправьте /start"
+        "yoki /start yuboring."
     )
 
 # ============================================================
-# HEALTH CHECK
+# WEB SERVER & APPLICATION ENTRYPOINT
 # ============================================================
-
-async def health_check(request):
+async def health_check(request): 
     return web.Response(text="OK")
-
-# ============================================================
-# WEB SERVER
-# ============================================================
 
 async def start_web_server() -> None:
     app = web.Application()
@@ -650,18 +469,11 @@ async def start_web_server() -> None:
     await runner.setup()
     port = int(os.environ.get("PORT", 10000))
     await web.TCPSite(runner, "0.0.0.0", port).start()
-    logger.info("✅ Веб-сервер запущен на порту %s", port)
-
-# ============================================================
-# MAIN
-# ============================================================
 
 async def main() -> None:
     db_init()
     await start_web_server()
-    logger.info("✅ Бот запущен. Polling...")
     await dp.start_polling(bot)
-
 
 if __name__ == "__main__":
     asyncio.run(main())
