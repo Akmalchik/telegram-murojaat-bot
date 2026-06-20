@@ -620,6 +620,8 @@ async def cmd_stat(message: Message, **kwargs):
 @dp.message(lambda m: m.text == "➕ Yangi murojaat")
 async def restart_form(message: Message, state: FSMContext):
     user_id = message.from_user.id
+
+    logger.info("UNKNOWN MESSAGE: user=%s active=%s", user_id, user_id in ACTIVE_USERS)
     _cancel_pending(user_id)
     _clean_buffers(user_id)
     await state.clear()
