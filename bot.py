@@ -658,7 +658,26 @@ async def handle_group_reply(message: Message):
 
 @dp.message()
 async def unknown_message(message: Message):
+
     if message.chat.type != "private":
+        return
+
+    user_id = message.from_user.id
+
+    if user_id in ACTIVE_USERS:
+        user = ACTIVE_USERS[user_id]
+
+        await bot.send_message(
+            GROUP_ID,
+            f"💬 Qo'shimcha xabar\n\n"
+            f"👤 {user['fullname']}\n"
+            f"🏠 {user['mahalla']}\n"
+            f"📞 {user['phone']}\n\n"
+            f"📝 {message.text}",
+        )
+
+        await message.answer("📨 Xabaringiz mas'ul xodimlarga yuborildi.")
+
         return
 
     await message.answer(
