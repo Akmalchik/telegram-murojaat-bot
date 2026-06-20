@@ -675,6 +675,7 @@ async def unknown_message(message: Message):
             f"👤 {user['fullname']}\n"
             f"🏠 {user['mahalla']}\n"
             f"📞 {user['phone']}\n\n"
+            f"🆔 Telegram ID: {user_id}\n\n"
             f"📝 {message.text}",
         )
 
