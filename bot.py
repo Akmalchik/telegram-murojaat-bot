@@ -625,16 +625,44 @@ async def restart_form(message: Message, state: FSMContext):
 
 
 @dp.message()
-async def unknown_message(message: Message):
-    if message.chat.type != "private":
+async def handle_group_reply(message: Message):
+
+    if message.chat.id != GROUP_ID:
         return
-    await message.answer(
-        "ℹ️ Sizning murojaatingiz allaqachon yuborilgan.\n\n"
-        "➕ Yangi murojaat uchun:\n"
-        "— «➕ Yangi murojaat» tugmasini bosing\n"
-        "yoki /start yuboring."
+
+    if not message.reply_to_message:
+        return
+
+    original_text = message.reply_to_message.text or ""
+
+    match = re.search(
+        r"Telegram ID:\s*(\d+)",
+        original_text
     )
 
+    if not match:
+        return
+
+    user_id = int(match.group(1))
+
+    try:
+        await bot.send_message(
+            user_id,
+            message.text
+        )
+
+        await message.reply(
+            "✅ Javob foydalanuvchiga yuborildi"
+        )
+
+    except Exception as e:
+        await message.reply(
+            f"❌ Yuborilmadi: {e}"
+        )
+
+
+@dp.message()
+async def unknown_message(message: Message):
 
 # ============================================================
 # WEB SERVER & APPLICATION ENTRYPOINT
