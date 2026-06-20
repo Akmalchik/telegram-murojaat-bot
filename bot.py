@@ -635,10 +635,7 @@ async def handle_group_reply(message: Message):
 
     original_text = message.reply_to_message.text or ""
 
-    match = re.search(
-        r"Telegram ID:\s*(\d+)",
-        original_text
-    )
+    match = re.search(r"Telegram ID:\s*(\d+)", original_text)
 
     if not match:
         return
@@ -646,23 +643,26 @@ async def handle_group_reply(message: Message):
     user_id = int(match.group(1))
 
     try:
-        await bot.send_message(
-            user_id,
-            message.text
-        )
+        await bot.send_message(user_id, message.text)
 
-        await message.reply(
-            "✅ Javob foydalanuvchiga yuborildi"
-        )
+        await message.reply("✅ Javob foydalanuvchiga yuborildi")
 
     except Exception as e:
-        await message.reply(
-            f"❌ Yuborilmadi: {e}"
-        )
+        await message.reply(f"❌ Yuborilmadi: {e}")
 
 
 @dp.message()
 async def unknown_message(message: Message):
+    if message.chat.type != "private":
+        return
+
+    await message.answer(
+        "ℹ️ Sizning murojaatingiz allaqachon yuborilgan.\n\n"
+        "➕ Yangi murojaat uchun:\n"
+        "— «➕ Yangi murojaat» tugmasini bosing\n"
+        "yoki /start yuboring."
+    )
+
 
 # ============================================================
 # WEB SERVER & APPLICATION ENTRYPOINT
