@@ -47,7 +47,7 @@ load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
 GROUP_ID = int(os.getenv("GROUP_ID", "0"))
 SHEET_URL = os.getenv("SHEET_URL", "")
-
+ACTIVE_USERS = {}
 _raw_admins = os.getenv("ADMIN_IDS", "")
 ADMIN_IDS: set[int] = {int(x) for x in _raw_admins.split(",") if x.strip().isdigit()}
 
@@ -448,6 +448,11 @@ async def send_appeal(user_id: int, state: FSMContext) -> None:
         ).zfill(5)
         antispam_record(user_id)
 
+        ACTIVE_USERS[user_id] = {
+            "fullname": data["fullname"],
+            "mahalla": data["mahalla"],
+            "phone": data["phone"],
+        }
         # Экранирование HTML сущностей для 100% стабильности разметки
         safe_fullname = (
             data["fullname"]
