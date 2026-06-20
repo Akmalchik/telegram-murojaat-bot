@@ -488,8 +488,11 @@ async def send_appeal(user_id: int, state: FSMContext) -> None:
             f"🆔 <b>Telegram ID:</b> {user_id}\n\n"
             f"📝 <b>Murojaat / Обращение:</b>\n{safe_text}"
         )
-        await bot.send_message(GROUP_ID, group_msg, parse_mode="HTML")
+        sent_message = await bot.send_message(GROUP_ID, group_msg, parse_mode="HTML")
 
+        logger.info(
+            "GROUP MESSAGE ID: %s | USER ID: %s", sent_message.message_id, user_id
+        )
         if photos:
             try:
                 await bot.send_media_group(
