@@ -631,7 +631,7 @@ async def restart_form(message: Message, state: FSMContext):
     await state.set_state(Form.fullname)
 
 
-@dp.message()
+@dp.message(lambda m: m.chat.id == GROUP_ID)
 async def handle_group_reply(message: Message):
 
     if message.chat.id != GROUP_ID:
@@ -658,7 +658,7 @@ async def handle_group_reply(message: Message):
         await message.reply(f"❌ Yuborilmadi: {e}")
 
 
-@dp.message()
+@dp.message(lambda m: m.chat.type == "private")
 async def unknown_message(message: Message):
 
     if message.chat.type != "private":
